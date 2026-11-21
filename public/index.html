@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Frontdesk</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1d2433;--mut:#667085;--line:#dfe3ea;--acc:#1f4fd8;--red:#b42318;--amb:#a15c00;--grn:#1b7a3d}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+header{background:#18233d;color:#fff;padding:10px 20px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+header a{color:#cdd6ee;text-decoration:none}header a:hover{color:#fff}header b{margin-right:auto;font-size:17px}
+main{max-width:1040px;margin:20px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:14px}
+h2{margin:0 0 10px;font-size:19px}h3{margin:0 0 8px;font-size:15px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:600;font-size:13px}
+.b{display:inline-block;padding:0 8px;border-radius:10px;font-size:12px;font-weight:600;background:#e9edf4;margin:0 4px 2px 0}
+.b.late{background:#fde8e6;color:var(--red)}.b.wait{background:#e3edff;color:var(--acc)}.b.soon{background:#fff0d4;color:var(--amb)}.b.ok{background:#e1f5e8;color:var(--grn)}
+button,select{font:inherit;padding:5px 12px;border:1px solid var(--line);border-radius:5px;background:#fff;cursor:pointer}
+button.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+input,textarea{font:inherit;width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:5px;margin:3px 0 10px}
+label{font-size:13px;color:var(--mut)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.msg{padding:8px 12px;border-radius:6px;margin-bottom:8px;border:1px solid var(--line);background:#fff}
+.msg.agent{background:#eef3ff}.msg.internal{background:#fff7d6;border-color:#e6c34a;border-left:5px solid #d19a00}
+.msg small{color:var(--mut)}.msg p{margin:4px 0 0;white-space:pre-wrap}
+.tabs button{border-radius:5px 5px 0 0}.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.tabs button.on.int{background:#d19a00;border-color:#d19a00}
+.mut{color:var(--mut)}.err{color:var(--red);margin:6px 0}.ev{font-size:13px;padding:3px 0;border-bottom:1px dotted var(--line)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px}
+</style></head><body>
+<header><b>Frontdesk</b><a href="#/">Tickets</a><a href="#/report">Late report</a><a href="#/new">Customer: new ticket</a><span id="who"></span></header>
+<main id="app"></main>
+<script>
+const app = document.getElementById('app');
+let token = localStorage.getItem('tok'), me = JSON.parse(localStorage.getItem('me') || 'null'), flt = 'mine', tab = 'reply';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = d => d ? new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) : '-';
+const hm = m => { m = Math.abs(Math.round(m)); return (m >= 60 ? Math.floor(m / 60) + 'h ' : '') + (m % 60) + 'm'; };
+const left = (label, m) => m === null ? '' : m < 0 ? `<span style="color:var(--red)">${label} overdue ${hm(m)}</span>` : `${label} in ${hm(m)}`;
+async function api(p, o = {}) {
+  const r = await fetch('/api' + p, { method: o.method || 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: o.body ? JSON.stringify(o.body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && token) { logout(); }
+  if (!r.ok) throw new Error(j.error || 'Request failed');
+  return j;
+}
+function logout() { token = null; me = null; localStorage.clear(); render(); }
+const act = async (fn, again) => { try { await fn(); } catch (e) { alert(e.message); } again ? again() : render(); };
+const badges = t => [
+  `<span class="b">${esc(t.priority)}</span>`, `<span class="b">${esc(t.status)}</span>`,
+  t.late ? '<span class="b late">Late</span>' : '', t.paused ? '<span class="b wait">Waiting on customer</span>' : '', t.dueSoon ? '<span class="b soon">Due soon</span>' : ''].join('');
+
+async function loginPage() {
+  const agents = await api('/agents');
+  app.innerHTML = `<div class="card" style="max-width:380px"><h2>Agent sign in</h2><label>Agent</label>
+    <select id="ag" style="width:100%;margin:3px 0 10px">${agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>
+    <label>Password (demo: frontdesk)</label><input id="pw" type="password"><button class="p" id="go">Sign in</button><div class="err" id="e"></div></div>`;
+  document.getElementById('go').onclick = async () => {
+    try { const r = await api('/login', { method: 'POST', body: { agentId: ag.value, password: pw.value } });
+      token = r.token; me = r.agent; localStorage.setItem('tok', token); localStorage.setItem('me', JSON.stringify(me)); render(); }
+    catch (e) { document.getElementById('e').textContent = e.message; }
+  };
+}
+
+async function homePage() {
+  if (!token) return loginPage();
+  let list = await api('/tickets');
+  const open = list.filter(t => !['resolved', 'closed'].includes(t.status));
+  const shown = flt === 'mine' ? open.filter(t => t.assignee_id === me.id) : flt === 'unassigned' ? open.filter(t => !t.assignee_id) : flt === 'done' ? list.filter(t => ['resolved', 'closed'].includes(t.status)) : open;
+  shown.sort((a, b) => (b.late - a.late) || (b.dueSoon - a.dueSoon) || b.id - a.id);
+  app.innerHTML = `<div class="card"><div class="row"><h2 style="margin:0 auto 0 0">Tickets</h2>
+    ${['mine', 'unassigned', 'all', 'done'].map(f => `<button data-f="${f}" class="${f === flt ? 'p' : ''}">${{ mine: 'My tickets', unassigned: 'Unassigned', all: 'All open', done: 'Resolved / closed' }[f]}</button>`).join('')}</div></div>
+    <div class="card"><table><tr><th>#</th><th>Ticket</th><th>Status</th><th>Time left (working)</th><th>Assigned</th><th></th></tr>
+    ${shown.map(t => `<tr><td>${t.id}</td><td><a href="#/t/${t.id}">${esc(t.subject)}</a><br><span class="mut">${esc(t.customer_name)}</span></td><td>${badges(t)}</td>
+      <td>${t.paused ? '<span class="mut">clock paused</span>' : [left('Reply', t.replyLeft), left('Resolve', t.resLeft)].filter(Boolean).join('<br>')}</td>
+      <td>${esc(t.assignee_name || '-')}</td><td>${!t.assignee_id && !['resolved', 'closed'].includes(t.status) ? `<button class="p" data-claim="${t.id}">Take</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="mut">No tickets here.</td></tr>'}</table></div>`;
+  app.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { flt = b.dataset.f; homePage(); });
+  app.querySelectorAll('[data-claim]').forEach(b => b.onclick = () => act(() => api(`/tickets/${b.dataset.claim}/claim`, { method: 'POST' })));
+}
+
+async function ticketPage(id) {
+  if (!token) return loginPage();
+  const { ticket: t, thread, events } = await api('/tickets/' + id);
+  const mine = t.assignee_id === me.id, done = ['resolved', 'closed'].includes(t.status);
+  app.innerHTML = `<p><a href="#/">&larr; Tickets</a></p>
+  <div class="card"><h2>#${t.id} ${esc(t.subject)}</h2><div>${badges(t)}</div>
+    <div class="grid" style="margin-top:8px"><div><label>Customer</label><br>${esc(t.customer_name)}</div><div><label>Assigned to</label><br>${esc(t.assignee_name || 'Nobody yet')}</div>
+    <div><label>First reply due</label><br>${t.first_response_at ? 'Replied ' + fmt(t.first_response_at) : fmt(t.reply_due)}</div><div><label>Resolution due</label><br>${fmt(t.resolve_due)}</div>
+    <div><label>Paused (working min)</label><br>${t.paused ? 'Paused now' : ''} ${t.paused_total_min}</div></div>
+    <div class="row" style="margin-top:12px">
+      ${!t.assignee_id && !done ? '<button class="p" id="claim">Take this ticket</button>' : ''}
+      ${mine && !done ? '<button id="resolve">Mark resolved</button>' : ''}
+      ${!done ? `<label>Priority</label><select id="prio">${['critical', 'medium', 'low'].map(p => `<option ${p === t.priority ? 'selected' : ''}>${p}</option>`).join('')}</select>` : ''}</div></div>
+  <div class="card"><h3>Conversation</h3>${thread.map(m => `<div class="msg ${m.kind === 'internal' ? 'internal' : m.author_type}"><small><b>${m.kind === 'internal' ? 'INTERNAL NOTE (team only)' : esc(m.author)}</b> ${fmt(m.created_at)}</small><p>${esc(m.body)}</p></div>`).join('')}</div>
+  ${!done ? `<div class="card"><div class="tabs"><button data-tab="reply" class="${tab === 'reply' ? 'on' : ''}">Reply to customer</button> <button data-tab="note" class="int ${tab === 'note' ? 'on int' : ''}">Internal note</button></div>
+    ${tab === 'reply' ? (mine ? `<textarea id="txt" rows="4" placeholder="This is sent to the customer"></textarea><div class="row"><button class="p" id="send">Send reply</button><label><input type="checkbox" id="wait" style="width:auto;margin:0 4px 0 0">I asked a question: wait for the customer (pauses the clock)</label></div>` : '<p class="mut">Take this ticket to reply to the customer.</p>')
+      : `<textarea id="txt" rows="4" placeholder="Visible to the team only. The customer never sees this."></textarea><button id="send" style="background:#d19a00;border-color:#d19a00;color:#fff">Save internal note</button>`}</div>` : ''}
+  <div class="card"><h3>History (cannot be edited)</h3>${events.map(e => `<div class="ev"><b>${fmt(e.created_at)}</b> &middot; ${esc(e.actor_name)} (${e.actor_type}) &middot; <b>${esc(e.type)}</b> <span class="mut">${esc(Object.keys(e.detail).length ? JSON.stringify(e.detail) : '')}</span></div>`).join('')}</div>`;
+  const again = () => ticketPage(id), $ = s => document.getElementById(s);
+  if ($('claim')) $('claim').onclick = () => act(() => api(`/tickets/${id}/claim`, { method: 'POST' }), again);
+  if ($('resolve')) $('resolve').onclick = () => act(() => api(`/tickets/${id}/resolve`, { method: 'POST' }), again);
+  if ($('prio')) $('prio').onchange = e => act(() => api(`/tickets/${id}/priority`, { method: 'POST', body: { priority: e.target.value } }), again);
+  app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; again(); });
+  if ($('send')) $('send').onclick = () => act(() => api(`/tickets/${id}/${tab === 'reply' ? 'reply' : 'note'}`, { method: 'POST', body: { body: $('txt').value, waitForCustomer: !!($('wait') && $('wait').checked) } }), again);
+}
+
+async function reportPage() {
+  if (!token) return loginPage();
+  const rows = await api('/report/late');
+  app.innerHTML = `<div class="card"><h2>Late tickets</h2><p class="mut">Built from the permanent history. Lateness is in working minutes.</p><table>
+    <tr><th>Ticket</th><th>Priority</th><th>Missed</th><th>Was due</th><th>Late by</th><th>Agent</th><th>Why</th></tr>
+    ${rows.map(r => `<tr><td><a href="#/t/${r.ticketId}">#${r.ticketId}</a> ${esc(r.subject)}</td><td>${esc(r.priority)}</td><td>${r.kind}</td><td>${fmt(r.due)}</td><td>${hm(r.lateWorkingMin)}</td><td>${esc(r.assignee || '-')}</td><td>${esc(r.why)}</td></tr>`).join('') || '<tr><td colspan="7" class="mut">No breaches recorded.</td></tr>'}</table></div>`;
+}
+
+function newTicketPage() {
+  app.innerHTML = `<div class="card" style="max-width:520px"><h2>Contact Arvo Support</h2>
+    <label>Your name</label><input id="n"><label>Email</label><input id="em" type="email"><label>Subject</label><input id="s">
+    <label>How bad is it?</label><select id="p" style="width:100%;margin:3px 0 10px"><option value="critical">I cannot work at all</option><option value="medium" selected>Something is broken, I can work around it</option><option value="low">A question or small request</option></select>
+    <label>Describe the problem</label><textarea id="b" rows="5"></textarea><button class="p" id="go">Send</button><div class="err" id="e"></div></div>`;
+  document.getElementById('go').onclick = async () => {
+    try { const r = await api('/customer/tickets', { method: 'POST', body: { name: n.value, email: em.value, subject: s.value, priority: p.value, body: b.value } }); location.hash = '#/c/' + r.token; }
+    catch (e) { document.getElementById('e').textContent = e.message; }
+  };
+}
+
+async function customerPage(tk) {
+  const { ticket: t, messages } = await api('/customer/tickets/' + tk);
+  const done = ['resolved', 'closed'].includes(t.status);
+  app.innerHTML = `<div class="card" style="max-width:640px"><h2>${esc(t.subject)}</h2><p class="mut">Status: ${esc(t.status)}. Keep this page's link to come back.</p>
+    ${messages.map(m => `<div class="msg ${m.author_type}"><small><b>${esc(m.author)}</b> ${fmt(m.created_at)}</small><p>${esc(m.body)}</p></div>`).join('')}
+    ${!done ? '<textarea id="b" rows="3" placeholder="Write a reply"></textarea><button class="p" id="go">Send reply</button>'
+      : t.canReopen ? `<p>Not fixed? You can reopen this ticket until ${fmt(t.reopenUntil)}.</p><textarea id="b" rows="3" placeholder="What is still wrong?"></textarea><button class="p" id="go">Reopen ticket</button>`
+      : '<p>This ticket is closed and can no longer be reopened. <a href="#/new">Create a new ticket</a>.</p>'}<div class="err" id="e"></div></div>`;
+  const go = document.getElementById('go');
+  if (go) go.onclick = async () => { try { await api(`/customer/tickets/${tk}/${done ? 'reopen' : 'reply'}`, { method: 'POST', body: { body: b.value } }); customerPage(tk); } catch (e) { document.getElementById('e').textContent = e.message; } };
+}
+
+async function render() {
+  document.getElementById('who').innerHTML = me ? `${esc(me.name)} &middot; <a href="#" id="lo">Sign out</a>` : '';
+  const lo = document.getElementById('lo'); if (lo) lo.onclick = e => { e.preventDefault(); logout(); };
+  const [, a, b] = (location.hash.slice(1) || '/').split('/');
+  try {
+    if (a === 't') await ticketPage(+b); else if (a === 'report') await reportPage(); else if (a === 'new') newTicketPage(); else if (a === 'c') await customerPage(b); else await homePage();
+  } catch (e) { app.innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
+}
+addEventListener('hashchange', render); render();
+</script></body></html>
