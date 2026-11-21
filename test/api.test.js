@@ -82,4 +82,9 @@ run('reopen works inside the window, is refused after it', async () => {
   await pool.query("UPDATE tickets SET done_at = now() - interval '8 days' WHERE id=$1", [id]);
   assert.equal((await call(`/customer/tickets/${token}/reopen`, { method: 'POST', body: { body: 'again' } })).status, 410);
 });
+run('GET /healthz returns 200 and ok:true', async () => {
+  const r = await fetch(`http://127.0.0.1:${srv.address().port}/healthz`);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.deepEqual(body, { ok: true });
 });

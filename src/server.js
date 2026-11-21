@@ -115,6 +115,17 @@ const app = express();
 app.use(express.json({ limit: '100kb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
+const healthzHandler = async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    res.status(503).json({ ok: false, error: 'Database unavailable' });
+  }
+};
+app.get('/healthz', healthzHandler);
+app.get('/api/healthz', healthzHandler);
+
 const auth = wrap(async (req, res, next) => {
   const tok = (req.headers.authorization || '').replace('Bearer ', '');
   const a = (await pool.query('SELECT a.id,a.name FROM sessions s JOIN agents a ON a.id=s.agent_id WHERE s.token=$1', [tok])).rows[0];
@@ -321,7 +332,22 @@ async function seedSamples() {
 module.exports = { app, init, pool, sweep };
 if (require.main === module) {
   init().then(() => {
-    app.listen(process.env.PORT || 3000, () => console.log('Frontdesk running on port ' + (process.env.PORT || 3000)));
-    setInterval(() => sweep().catch(console.error), 60000);
+    const server = app.listen(process.env.PORT || 3000, () => console.log('Frontdesk running on port ' + (process.env.PORT || 3000)));
+    const sweepTimer = setInterval(() => sweep().catch(console.error), 60000);
+
+    process.on('SIGTERM', () => {
+      clearInterval(sweepTimer);
+      server.close(async () => {
+        try {
+          await pool.end();
+        } catch (e) {
+          console.error(e);
+        }
+        process.exit(0);
+      });
+      if (typeof server.closeIdleConnections === 'function') {
+        server.closeIdleConnections();
+      }
+    });
   }).catch(e => { console.error(e); process.exit(1); });
 }
