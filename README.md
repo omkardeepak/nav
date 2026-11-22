@@ -42,7 +42,7 @@ docker compose --profile test run --rm test
 |---|---|
 | INC-0291 two agents take one ticket | Claim is one atomic `UPDATE ... WHERE assignee_id IS NULL`; loser gets 409 "Already taken by X". Only the assigned agent can reply. Tested with two simultaneous requests. |
 | INC-0304 note reached the customer | Notes are in their own table (`internal_notes`). Customer endpoints only query `messages` and select named columns, so a note cannot be returned by them. Tested. |
-| INC-0318 no proof of what happened | `ticket_events` is append-only (DB triggers block UPDATE/DELETE/TRUNCATE, also on messages, notes, and account_events). Every row has actor, server-side time and detail. Clients never send timestamps. First reply is its own event; internal notes do not count as a reply. |
+| INC-0318 no proof of what happened | `ticket_events` is append-only (DB triggers block UPDATE/DELETE/TRUNCATE, also on messages, notes, and account_events) and secured with a **cryptographic per-ticket SHA-256 hash chain** (`prev_hash`, `hash`). Every row has actor, server-side time and detail. Clients never send timestamps. First reply is its own event; internal notes do not count as a reply. Any agent can verify event integrity via `GET /api/tickets/:id/verify`. |
 
 ## Decisions I made (the document leaves these open)
 | Question | Decision |
@@ -62,6 +62,7 @@ docker compose --profile test run --rm test
 | Manager | One role, "manager" (Meera): only she sees the late report, edits holidays, manages SLA targets, and can reset an agent's password. She is not one of the 9 agents. |
 | Holidays | Managed on the holidays page. Adding or removing a day **recalculates the deadlines of open tickets**, and each change is written to that ticket's history as `deadline_recalculated` with the old and new deadlines. |
 | New ticket after the window | A link on the closed ticket page creates a new ticket that is **linked** to the old one (`previous_ticket_id`), shown on both tickets for agents. Customers never see the old conversation on the new ticket. |
+| Hash chain integrity | Per-ticket cryptographic SHA-256 hash chain (`hash = sha256(prev_hash \| ticket_id \| type \| actor_type \| actor_id \| actor_name \| canonicalJSON(detail) \| created_at ISO)`). Displayed as "History verified" on the ticket page. Note honestly: this makes history **tamper-evident, not tamper-proof**; an attacker with full database owner rights who rewrites every subsequent hash in the chain can still forge history. True tamper-proofing would require external anchoring. |
 
 ## Deploy
 
@@ -87,6 +88,5 @@ Live URL: `https://<your-render-subdomain>.onrender.com`
 ## Short note: what I did not finish, and why
 Everything in the story's rules is built and tested. What is left is lower priority:
 - **No email notifications.** Customers get no email when an agent replies; they must reopen their ticket link. Needs an email provider, which is outside the 8 hours.
-- **No tamper-evident hash chain** on the event log. Database triggers stop edits and deletes, but a database owner could still drop the triggers.
 - **Free-tier hosting sleeps** after inactivity. The breach and auto-close check also runs when the list or report is opened, so nothing is lost, but it may be recorded a little late.
 - **Not done:** search, pagination, attachments, edit of tickets by customer.

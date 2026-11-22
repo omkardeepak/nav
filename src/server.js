@@ -52,10 +52,50 @@ async function lock(c, where, val) {
   const r = await c.query(`SELECT * FROM tickets WHERE ${where}=$1 FOR UPDATE`, [val]);
   return r.rows[0] || fail(404, 'Ticket not found');
 }
-// Every event: server-side time, who did it, what happened. Table is append-only (see schema.sql).
-const ev = (c, ticketId, type, actor, detail = {}, at = new Date()) =>
-  c.query('INSERT INTO ticket_events(ticket_id,type,actor_type,actor_id,actor_name,detail,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
-    [ticketId, type, actor.type, actor.id, actor.name, detail, at]);
+function canonicalJSON(val) {
+  if (val === null || val === undefined) return 'null';
+  if (typeof val.toJSON === 'function') return canonicalJSON(val.toJSON());
+  if (typeof val !== 'object') return JSON.stringify(val);
+  if (Array.isArray(val)) return '[' + val.map(canonicalJSON).join(',') + ']';
+  const keys = Object.keys(val).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalJSON(val[k])).join(',') + '}';
+}
+
+function computeEventHash(e) {
+  const iso = e.created_at instanceof Date ? e.created_at.toISOString() : new Date(e.created_at).toISOString();
+  const aid = (e.actor_id === null || e.actor_id === undefined) ? '' : String(e.actor_id);
+  const str = [
+    e.prev_hash,
+    e.ticket_id,
+    e.type,
+    e.actor_type,
+    aid,
+    e.actor_name,
+    canonicalJSON(e.detail),
+    iso
+  ].join('|');
+  return crypto.createHash('sha256').update(str).digest('hex');
+}
+
+// Every event: server-side time, who did it, what happened. Table is append-only with cryptographic hash chain (INC-0318).
+const ev = async (c, ticketId, type, actor, detail = {}, at = new Date()) => {
+  const last = (await c.query('SELECT hash FROM ticket_events WHERE ticket_id=$1 ORDER BY id DESC LIMIT 1', [ticketId])).rows[0];
+  const prev_hash = last ? last.hash : 'genesis';
+  const hash = computeEventHash({
+    prev_hash,
+    ticket_id: ticketId,
+    type,
+    actor_type: actor.type,
+    actor_id: actor.id,
+    actor_name: actor.name,
+    detail,
+    created_at: at
+  });
+  return c.query(
+    'INSERT INTO ticket_events(ticket_id,type,actor_type,actor_id,actor_name,detail,created_at,prev_hash,hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [ticketId, type, actor.type, actor.id, actor.name, detail, at, prev_hash, hash]
+  );
+};
 const getHolidays = async c => new Set((await c.query("SELECT to_char(day,'YYYY-MM-DD') d FROM holidays")).rows.map(r => r.d));
 const getPolicy = async (c, p) => (await c.query('SELECT * FROM sla_policies WHERE priority=$1', [p])).rows[0] || fail(400, 'Invalid priority');
 
@@ -217,6 +257,33 @@ app.get('/api/tickets/:id', auth, wrap(async (req, res) => {
   const events = (await pool.query('SELECT type,actor_type,actor_name,detail,created_at FROM ticket_events WHERE ticket_id=$1 ORDER BY id', [id])).rows;
   const followUps = (await pool.query('SELECT id FROM tickets WHERE previous_ticket_id=$1 ORDER BY id', [id])).rows.map(r => r.id);
   res.json({ ticket: view(t, now, hol), thread: [...pub, ...notes].sort((x, y) => x.created_at - y.created_at), events, followUps });
+}));
+
+app.get('/api/tickets/:id/verify', auth, wrap(async (req, res) => {
+  const id = +req.params.id;
+  const t = (await pool.query('SELECT id FROM tickets WHERE id=$1', [id])).rows[0] || fail(404, 'Ticket not found');
+  const events = (await pool.query('SELECT * FROM ticket_events WHERE ticket_id=$1 ORDER BY id ASC', [id])).rows;
+  let expectedPrev = 'genesis';
+  for (const e of events) {
+    if (e.prev_hash !== expectedPrev) {
+      return res.json({ ok: false, brokenAtEventId: e.id });
+    }
+    const expectedHash = computeEventHash({
+      prev_hash: e.prev_hash,
+      ticket_id: e.ticket_id,
+      type: e.type,
+      actor_type: e.actor_type,
+      actor_id: e.actor_id,
+      actor_name: e.actor_name,
+      detail: e.detail,
+      created_at: e.created_at
+    });
+    if (e.hash !== expectedHash) {
+      return res.json({ ok: false, brokenAtEventId: e.id });
+    }
+    expectedPrev = e.hash;
+  }
+  res.json({ ok: true, events: events.length });
 }));
 
 // ----- agent: actions -----
@@ -415,9 +482,39 @@ app.post('/api/customer/tickets/:token/reopen', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+async function backfillHashes() {
+  const ticketsWithNullHashes = (await pool.query('SELECT DISTINCT ticket_id FROM ticket_events WHERE hash IS NULL')).rows;
+  for (const { ticket_id } of ticketsWithNullHashes) {
+    await tx(async c => {
+      await lock(c, 'id', ticket_id);
+      const events = (await c.query('SELECT * FROM ticket_events WHERE ticket_id=$1 ORDER BY id ASC', [ticket_id])).rows;
+      let prev_hash = 'genesis';
+      for (const e of events) {
+        if (e.hash) {
+          prev_hash = e.hash;
+          continue;
+        }
+        const hash = computeEventHash({
+          prev_hash,
+          ticket_id: e.ticket_id,
+          type: e.type,
+          actor_type: e.actor_type,
+          actor_id: e.actor_id,
+          actor_name: e.actor_name,
+          detail: e.detail,
+          created_at: e.created_at
+        });
+        await c.query('UPDATE ticket_events SET prev_hash=$1, hash=$2 WHERE id=$3', [prev_hash, hash, e.id]);
+        prev_hash = hash;
+      }
+    });
+  }
+}
+
 // ---------- startup: schema, reference data, sample tickets ----------
 async function init() {
   await pool.query(fs.readFileSync(path.join(__dirname, '../schema.sql'), 'utf8'));
+  await backfillHashes();
   await pool.query(`INSERT INTO sla_policies(priority,reply_min,resolve_min,label) VALUES
     ('critical',120,NULL,'Cannot work at all'),('medium',270,1620,'Medium'),('low',540,2700,'Question / small request') ON CONFLICT DO NOTHING`);
   await pool.query(`INSERT INTO holidays(day,name) VALUES ('2026-12-25','Christmas'),('2027-01-26','Republic Day'),('2027-08-15','Independence Day') ON CONFLICT DO NOTHING`);
@@ -456,7 +553,7 @@ async function seedSamples() {
   links.forEach(t => console.log(`Sample ticket #${t.id} customer link: /#/c/${t.token}`));
 }
 
-module.exports = { app, init, pool, sweep };
+module.exports = { app, init, pool, sweep, canonicalJSON, computeEventHash };
 if (require.main === module) {
   init().then(() => {
     const server = app.listen(process.env.PORT || 3000, () => console.log('Frontdesk running on port ' + (process.env.PORT || 3000)));

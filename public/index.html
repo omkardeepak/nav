@@ -80,7 +80,10 @@ async function homePage() {
 
 async function ticketPage(id) {
   if (!token) return loginPage();
-  const { ticket: t, thread, events, followUps } = await api('/tickets/' + id);
+  const [{ ticket: t, thread, events, followUps }, ver] = await Promise.all([
+    api('/tickets/' + id),
+    api('/tickets/' + id + '/verify').catch(() => ({ ok: false }))
+  ]);
   const mine = t.assignee_id === me.id, done = ['resolved', 'closed'].includes(t.status);
   app.innerHTML = `<p><a href="#/">&larr; Tickets</a></p>
   <div class="card"><h2>#${t.id} ${esc(t.subject)}</h2><div>${badges(t)}</div>${t.previous_ticket_id ? `<p class="mut">Follow-up to <a href="#/t/${t.previous_ticket_id}">#${t.previous_ticket_id}</a></p>` : ''}${followUps.length ? `<p class="mut">Follow-up ticket: ${followUps.map(f => `<a href="#/t/${f}">#${f}</a>`).join(', ')}</p>` : ''}
@@ -95,7 +98,7 @@ async function ticketPage(id) {
   ${!done ? `<div class="card"><div class="tabs"><button data-tab="reply" class="${tab === 'reply' ? 'on' : ''}">Reply to customer</button> <button data-tab="note" class="int ${tab === 'note' ? 'on int' : ''}">Internal note</button></div>
     ${tab === 'reply' ? (mine ? `<textarea id="txt" rows="4" placeholder="This is sent to the customer"></textarea><div class="row"><button class="p" id="send">Send reply</button><label><input type="checkbox" id="wait" style="width:auto;margin:0 4px 0 0">I asked a question: wait for the customer (pauses the clock)</label></div>` : '<p class="mut">Take this ticket to reply to the customer.</p>')
       : `<textarea id="txt" rows="4" placeholder="Visible to the team only. The customer never sees this."></textarea><button id="send" style="background:#d19a00;border-color:#d19a00;color:#fff">Save internal note</button>`}</div>` : ''}
-  <div class="card"><h3>History (cannot be edited)</h3>${events.map(e => `<div class="ev"><b>${fmt(e.created_at)}</b> &middot; ${esc(e.actor_name)} (${e.actor_type}) &middot; <b>${esc(e.type)}</b> <span class="mut">${esc(Object.keys(e.detail).length ? JSON.stringify(e.detail) : '')}</span></div>`).join('')}</div>`;
+  <div class="card"><h3>History (cannot be edited) ${ver.ok ? '<span style="font-size:13px;font-weight:normal;color:var(--grn);margin-left:8px">● History verified</span>' : `<span style="font-size:13px;font-weight:normal;color:var(--red);margin-left:8px">● History altered at event #${ver.brokenAtEventId ?? '?'}</span>`}</h3>${events.map(e => `<div class="ev"><b>${fmt(e.created_at)}</b> &middot; ${esc(e.actor_name)} (${e.actor_type}) &middot; <b>${esc(e.type)}</b> <span class="mut">${esc(Object.keys(e.detail).length ? JSON.stringify(e.detail) : '')}</span></div>`).join('')}</div>`;
   const again = () => ticketPage(id), $ = s => document.getElementById(s);
   if ($('claim')) $('claim').onclick = () => act(() => api(`/tickets/${id}/claim`, { method: 'POST' }), again);
   if ($('resolve')) $('resolve').onclick = () => act(() => api(`/tickets/${id}/resolve`, { method: 'POST' }), again);

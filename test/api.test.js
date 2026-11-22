@@ -221,6 +221,56 @@ run('valid SLA change moves deadline of NEW ticket but not existing open ticket;
   // Restore policy
   await call('/sla/medium', { method: 'PUT', body: { reply_min: 270, resolve_min: 1620 } }, M);
 });
+
+run('ticket event history verifies ok', async () => {
+  const { id } = await newTicket();
+  await call(`/tickets/${id}/claim`, { method: 'POST' }, A);
+  await call(`/tickets/${id}/note`, { method: 'POST', body: { body: 'Internal check' } }, A);
+  await call(`/tickets/${id}/reply`, { method: 'POST', body: { body: 'Hello' } }, A);
+  const r = await call(`/tickets/${id}/verify`, {}, A);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.ok, true);
+  assert.equal(r.json.events, 5); // created, claimed, internal_note, agent_reply, first_response
+});
+
+run('tampering with ticket event row is detected by verify', async () => {
+  const { id } = await newTicket();
+  await call(`/tickets/${id}/claim`, { method: 'POST' }, A);
+  await call(`/tickets/${id}/reply`, { method: 'POST', body: { body: 'Checking issue' } }, A);
+
+  const evs = (await pool.query('SELECT id FROM ticket_events WHERE ticket_id=$1 ORDER BY id ASC', [id])).rows;
+  const targetId = evs[1].id;
+
+  // Disable trigger to simulate a DB owner directly altering history in SQL
+  await pool.query('ALTER TABLE ticket_events DISABLE TRIGGER ticket_events_ro');
+  await pool.query("UPDATE ticket_events SET type='escalated' WHERE id=$1", [targetId]);
+  await pool.query('ALTER TABLE ticket_events ENABLE TRIGGER ticket_events_ro');
+
+  const r = await call(`/tickets/${id}/verify`, {}, A);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.ok, false);
+  assert.equal(r.json.brokenAtEventId, targetId);
+});
+
+run('concurrent actions on the same ticket serialize cleanly and verify ok', async () => {
+  const { id } = await newTicket('low');
+  await call(`/tickets/${id}/claim`, { method: 'POST' }, A);
+
+  const [r1, r2, r3] = await Promise.all([
+    call(`/tickets/${id}/note`, { method: 'POST', body: { body: 'Concurrent note 1' } }, A),
+    call(`/tickets/${id}/note`, { method: 'POST', body: { body: 'Concurrent note 2' } }, A),
+    call(`/tickets/${id}/note`, { method: 'POST', body: { body: 'Concurrent note 3' } }, A),
+  ]);
+  assert.equal(r1.status, 200);
+  assert.equal(r2.status, 200);
+  assert.equal(r3.status, 200);
+
+  const ver = await call(`/tickets/${id}/verify`, {}, A);
+  assert.equal(ver.status, 200);
+  assert.equal(ver.json.ok, true);
+  assert.equal(ver.json.events, 5); // created, claimed, 3 notes
+});
+
 run('database migrations: fresh database and upgraded old database', async () => {
   async function cleanDb() {
     await pool.query(`
@@ -234,6 +284,7 @@ run('database migrations: fresh database and upgraded old database', async () =>
       DROP TABLE IF EXISTS holidays CASCADE;
       DROP TABLE IF EXISTS sla_policies CASCADE;
       DROP FUNCTION IF EXISTS forbid_change CASCADE;
+      DROP FUNCTION IF EXISTS forbid_ticket_events_change CASCADE;
     `);
   }
 
@@ -247,6 +298,10 @@ run('database migrations: fresh database and upgraded old database', async () =>
 
   const ticketCols = (await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='tickets'")).rows.map(r => r.column_name);
   assert.ok(ticketCols.includes('previous_ticket_id'), 'tickets table has previous_ticket_id column');
+
+  const eventCols = (await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='ticket_events'")).rows.map(r => r.column_name);
+  assert.ok(eventCols.includes('prev_hash'), 'ticket_events table has prev_hash column');
+  assert.ok(eventCols.includes('hash'), 'ticket_events table has hash column');
 
   const acctExists = (await pool.query("SELECT 1 FROM information_schema.tables WHERE table_name='account_events'")).rowCount;
   assert.equal(acctExists, 1, 'account_events table exists');
@@ -282,6 +337,9 @@ run('database migrations: fresh database and upgraded old database', async () =>
   `);
 
   await pool.query("INSERT INTO agents(name, email) VALUES('Asha', 'asha@arvo.example')");
+  await pool.query("INSERT INTO sla_policies(priority, reply_min, resolve_min, label) VALUES('medium', 270, 1620, 'Medium')");
+  await pool.query("INSERT INTO tickets(id, token, customer_name, customer_email, subject, priority, created_at, sla_start, reply_due, resolve_due) VALUES(1, 'tok1', 'C', 'c@x.io', 'Sub', 'medium', now(), now(), now(), now())");
+  await pool.query("INSERT INTO ticket_events(ticket_id, type, actor_type, actor_name, detail, created_at) VALUES(1, 'created', 'customer', 'C', '{}', now())");
 
   await init();
 
@@ -293,6 +351,10 @@ run('database migrations: fresh database and upgraded old database', async () =>
   const colsAfter = (await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='tickets'")).rows.map(r => r.column_name);
   assert.ok(colsAfter.includes('previous_ticket_id'), 'previous_ticket_id was added by migration');
 
+  const ev1 = (await pool.query("SELECT * FROM ticket_events WHERE id=1")).rows[0];
+  assert.equal(ev1.prev_hash, 'genesis');
+  assert.ok(ev1.hash);
+
   const meera = (await pool.query("SELECT * FROM agents WHERE role='manager'")).rows[0];
   assert.ok(meera, 'Meera manager was seeded');
   assert.equal(meera.name, 'Meera');
@@ -300,4 +362,7 @@ run('database migrations: fresh database and upgraded old database', async () =>
   // Re-init clean state
   await cleanDb();
   await init();
+  A = await login(1);
+  B = await login(2);
+  M = await login((await pool.query("SELECT id FROM agents WHERE role='manager'")).rows[0].id);
 });

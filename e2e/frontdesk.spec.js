@@ -129,6 +129,7 @@ test.describe.serial('Frontdesk E2E Tests', () => {
 
       await ashaPage.goto(`/#/t/${createdTicketId}`);
       await expect(ashaPage.locator('h2')).toContainText(`Production system offline`);
+      await expect(ashaPage.locator('h3:has-text("History")')).toContainText('History verified');
 
       // Write internal note containing "PRIVATE-123"
       await ashaPage.click('button[data-tab="note"]');
@@ -463,6 +464,7 @@ test.describe.serial('Frontdesk E2E Tests', () => {
       // 4. /#/t/1 (Ticket details)
       await page.goto('/#/t/1');
       await expect(page.locator('h2')).toContainText('Whole team cannot log in');
+      await expect(page.locator('h3:has-text("History")')).toContainText('History verified');
 
       // 5. /#/password
       await page.goto('/#/password');
