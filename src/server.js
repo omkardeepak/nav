@@ -148,7 +148,8 @@ async function resume(c, t, now, hol, actor) {
 
 function view(t, now, hol) {
   const done = DONE.includes(t.status), paused = t.status === 'waiting';
-  const left = due => now <= due ? H.businessMinutesBetween(now.getTime(), due.getTime(), hol) : -H.businessMinutesBetween(due.getTime(), now.getTime(), hol);
+  // Past the deadline must always be negative, even when no working minutes have passed since (e.g. due Friday 18:30, now Sunday).
+  const left = due => now <= due ? H.businessMinutesBetween(now.getTime(), due.getTime(), hol) : -(H.businessMinutesBetween(due.getTime(), now.getTime(), hol) || 0.01);
   const replyLeft = !t.first_response_at && !done ? left(t.reply_due) : null;
   const resLeft = !done ? left(t.resolve_due) : null;
   const late = !paused && ((replyLeft !== null && replyLeft < 0) || (resLeft !== null && resLeft < 0));
@@ -553,7 +554,7 @@ async function seedSamples() {
   links.forEach(t => console.log(`Sample ticket #${t.id} customer link: /#/c/${t.token}`));
 }
 
-module.exports = { app, init, pool, sweep, canonicalJSON, computeEventHash };
+module.exports = { app, init, pool, sweep, canonicalJSON, computeEventHash, view };
 if (require.main === module) {
   init().then(() => {
     const server = app.listen(process.env.PORT || 3000, () => console.log('Frontdesk running on port ' + (process.env.PORT || 3000)));

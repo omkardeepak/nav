@@ -2,28 +2,85 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
 <title>Frontdesk</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--ink:#1d2433;--mut:#667085;--line:#dfe3ea;--acc:#1f4fd8;--red:#b42318;--amb:#a15c00;--grn:#1b7a3d}
-*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
-header{background:#18233d;color:#fff;padding:10px 20px;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-header a{color:#cdd6ee;text-decoration:none}header a:hover{color:#fff}header b{margin-right:auto;font-size:17px}
-main{max-width:1040px;margin:20px auto;padding:0 16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:14px}
-h2{margin:0 0 10px;font-size:19px}h3{margin:0 0 8px;font-size:15px}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--mut);font-weight:600;font-size:13px}
-.b{display:inline-block;padding:0 8px;border-radius:10px;font-size:12px;font-weight:600;background:#e9edf4;margin:0 4px 2px 0}
-.b.late{background:#fde8e6;color:var(--red)}.b.wait{background:#e3edff;color:var(--acc)}.b.soon{background:#fff0d4;color:var(--amb)}.b.ok{background:#e1f5e8;color:var(--grn)}
-button,select{font:inherit;padding:5px 12px;border:1px solid var(--line);border-radius:5px;background:#fff;cursor:pointer}
-button.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
-button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-input,textarea{font:inherit;width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:5px;margin:3px 0 10px}
-label{font-size:13px;color:var(--mut)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.msg{padding:8px 12px;border-radius:6px;margin-bottom:8px;border:1px solid var(--line);background:#fff}
-.msg.agent{background:#eef3ff}.msg.internal{background:#fff7d6;border-color:#e6c34a;border-left:5px solid #d19a00}
-.msg small{color:var(--mut)}.msg p{margin:4px 0 0;white-space:pre-wrap}
-.tabs button{border-radius:5px 5px 0 0}.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.tabs button.on.int{background:#d19a00;border-color:#d19a00}
-.mut{color:var(--mut)}.err{color:var(--red);margin:6px 0}.ev{font-size:13px;padding:3px 0;border-bottom:1px dotted var(--line)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px}
+:root{--bg:#f2f0ea;--surface:#fcfbf8;--ink:#1e2227;--mut:#636972;--line:#ddd9cf;--line2:#b9b4a7;--acc:#1c4f6e;--acc-d:#143b53;--late:#a32a1f;--wait:#2a5b88;--soon:#85570a;--note:#faf2cb;--note-line:#b8921a;--grn:#2f6b3f;--red:var(--late)}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--ink);font-variant-numeric:tabular-nums}
+a{color:var(--acc)}a:hover{color:var(--acc-d)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+header{background:#22272d;display:flex;align-items:stretch;flex-wrap:wrap;padding:0 14px;min-height:48px}
+header b{display:flex;align-items:center;margin-right:auto;padding:0 14px 0 6px;font-size:16px;font-weight:650;color:#fff}
+header a{display:flex;align-items:center;padding:0 11px;color:#c6c2b7;text-decoration:none;font-size:14px;border-bottom:2px solid transparent;border-top:2px solid transparent}
+header a:hover{color:#fff}
+header a[aria-current]{color:#fff;border-bottom-color:#fff}
+header span{display:flex;align-items:stretch;color:#c6c2b7;font-size:14px}
+header #who{align-items:center;padding-left:8px;gap:2px}
+header #who a{padding:0 6px;border:0;text-decoration:underline;text-underline-offset:3px}
+
+body.public header a[href="#/"]{display:none}
+main{max-width:1080px;margin:24px auto 56px;padding:0 20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:16px 18px;margin-bottom:16px}
+.scroll{overflow-x:auto}.scroll table{min-width:600px}
+h2{margin:0 0 12px;font-size:20px;line-height:1.25;font-weight:650}
+h3{margin:0 0 10px;font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+p{margin:0 0 10px}
+.mut{color:var(--mut)}.sm{font-size:13px}.err{color:var(--late);margin:8px 0 0}
+
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:0 8px 8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);border-bottom:1px solid var(--line2)}
+td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr:hover td{background:#f6f4ee}
+tr.lt td:first-child{box-shadow:inset 3px 0 0 var(--late)}
+
+.b{display:inline-block;margin:0 4px 2px 0;padding:0 6px;border:1px solid var(--line2);border-radius:3px;font-size:12px;line-height:18px;font-weight:500;color:var(--mut);background:transparent}
+.b.late{background:var(--late);border-color:var(--late);color:#fff;font-weight:600}
+.b.wait{color:var(--wait);border-color:#9db8d3}
+.b.soon{color:var(--soon);border-color:#d4b36e}
+.b.ok{color:#2f6b3f;border-color:#a3c7ab}
+
+button,select{font:inherit;font-size:14px;color:var(--ink);padding:6px 12px;border:1px solid var(--line2);border-radius:4px;background:var(--surface);cursor:pointer;min-height:34px}
+button:hover{background:#ece9e1}
+button.p{background:var(--acc);border-color:var(--acc);color:#fff}button.p:hover{background:var(--acc-d)}
+button.pn{background:#6f5300;border-color:#6f5300;color:#fff}button.pn:hover{background:#573f00}
+button:disabled{opacity:.5;cursor:default}
+input,textarea{font:inherit;color:inherit;width:100%;padding:7px 9px;margin:3px 0 12px;background:#fff;border:1px solid var(--line2);border-radius:4px}
+textarea{resize:vertical}
+input[type=checkbox]{width:auto;margin:0 6px 0 0}
+label{font-size:13px;color:var(--mut)}
+.grid label{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px 24px;margin-top:14px}
+
+.msg{margin:0 0 8px;padding:6px 0 6px 14px;border-left:3px solid var(--line2)}
+.msg.agent{border-left-color:var(--acc)}
+.msg.internal{padding:8px 12px 8px 14px;background:var(--note);border-left-color:var(--note-line)}
+.msg small{font-size:13px;color:var(--mut)}.msg.internal small{color:#5e4a00}
+.msg p{margin:3px 0 0;white-space:pre-wrap}
+
+.tabs{display:flex;gap:2px;margin:-4px 0 14px;border-bottom:1px solid var(--line2)}
+.tabs button{margin-bottom:-1px;border:1px solid transparent;border-bottom:0;border-radius:4px 4px 0 0;background:transparent;color:var(--mut)}
+.tabs button.on{background:var(--surface);border-color:var(--line2);color:var(--ink);font-weight:600;border-bottom:1px solid var(--surface)}
+.tabs button.on.int{border-top:3px solid var(--note-line)}
+
+.ev{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.ev:last-child{border-bottom:0}.ev time{font-size:13px;color:var(--mut)}
+
+@media(max-width:600px){
+  header{padding:0 6px}main{margin-top:14px;padding:0 12px}.card{padding:12px}
+  .ev{grid-template-columns:1fr;gap:2px}
+  .scroll table.list{min-width:0}
+  .list tr:first-child{display:none}
+  .list tr{display:flex;flex-wrap:wrap;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)}
+  .list tr:last-child{border-bottom:0}
+  .list tr.lt{box-shadow:inset 3px 0 0 var(--late)}.list tr.lt td:first-child{box-shadow:none}
+  .list td{border:0;padding:2px 10px}
+  .list td:nth-child(1){display:none}
+  .list td:nth-child(2),.list td:nth-child(3){flex:1 1 100%}
+  .list td:nth-child(4){flex:1 1 55%}.list td:nth-child(5){flex:1 1 25%}.list td:nth-child(6){flex:0 0 auto}
+  .list td[colspan]{display:block;flex:1 1 100%}
+}
 </style></head><body>
 <header><b>Frontdesk</b><a href="#/">Tickets</a><span id="mgr"></span><a href="#/new">Customer: new ticket</a><span id="who"></span></header>
 <main id="app"></main>
@@ -33,7 +90,7 @@ let token = localStorage.getItem('tok'), me = JSON.parse(localStorage.getItem('m
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = d => d ? new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) : '-';
 const hm = m => { m = Math.abs(Math.round(m)); return (m >= 60 ? Math.floor(m / 60) + 'h ' : '') + (m % 60) + 'm'; };
-const left = (label, m) => m === null ? '' : m < 0 ? `<span style="color:var(--red)">${label} overdue ${hm(m)}</span>` : `${label} in ${hm(m)}`;
+const left = (label, m) => m === null ? '' : m < 0 ? `<span style="color:var(--late)">${label} overdue ${hm(m)}</span>` : `${label} in ${hm(m)}`;
 async function api(p, o = {}) {
   const r = await fetch('/api' + p, { method: o.method || 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: o.body ? JSON.stringify(o.body) : undefined });
   const j = await r.json().catch(() => ({}));
@@ -47,6 +104,13 @@ const act = async (fn, again) => { try { lastActionError = ''; await fn(); } cat
 const badges = t => [
   `<span class="b">${esc(t.priority)}</span>`, `<span class="b">${esc(t.status)}</span>`,
   t.late ? '<span class="b late">Late</span>' : '', t.paused ? '<span class="b wait">Waiting on customer</span>' : '', t.dueSoon ? '<span class="b soon">Due soon</span>' : ''].join('');
+
+const detailText = d => Object.entries(d).filter(([, v]) => v !== null && v !== '').map(([k, v]) =>
+  k.replace(/([A-Z])/g, ' $1').toLowerCase() + ': ' + (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) ? fmt(v) : typeof v === 'object' ? JSON.stringify(v) : v)).join(' \u00b7 ');
+function markNav() {
+  const h = (location.hash || '#/').split('?')[0], on = h === '#/' || h === '#' || h.startsWith('#/t/') ? '#/' : h;
+  document.querySelectorAll('header a[href]').forEach(a => a.getAttribute('href') === on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'));
+}
 
 async function loginPage() {
   const agents = await api('/agents');
@@ -70,8 +134,8 @@ async function homePage() {
   app.innerHTML = `<div class="card"><div class="row"><h2 style="margin:0 auto 0 0">Tickets</h2>
     ${['mine', 'unassigned', 'all', 'done'].map(f => `<button data-f="${f}" class="${f === flt ? 'p' : ''}">${{ mine: 'My tickets', unassigned: 'Unassigned', all: 'All open', done: 'Resolved / closed' }[f]}</button>`).join('')}</div>
     ${lastActionError ? `<div class="err" id="action-err">${esc(lastActionError)}</div>` : ''}</div>
-    <div class="card"><table><tr><th>#</th><th>Ticket</th><th>Status</th><th>Time left (working)</th><th>Assigned</th><th></th></tr>
-    ${shown.map(t => `<tr><td>${t.id}</td><td><a href="#/t/${t.id}">${esc(t.subject)}</a><br><span class="mut">${esc(t.customer_name)}</span></td><td>${badges(t)}</td>
+    <div class="card scroll"><table class="list"><tr><th>#</th><th>Ticket</th><th>Status</th><th>Time left (working)</th><th>Assigned</th><th></th></tr>
+    ${shown.map(t => `<tr class="${t.late ? 'lt' : ''}"><td>${t.id}</td><td><a href="#/t/${t.id}">${esc(t.subject)}</a><br><span class="mut">${esc(t.customer_name)}</span></td><td>${badges(t)}</td>
       <td>${t.paused ? '<span class="mut">clock paused</span>' : [left('Reply', t.replyLeft), left('Resolve', t.resLeft)].filter(Boolean).join('<br>')}</td>
       <td>${esc(t.assignee_name || '-')}</td><td>${!t.assignee_id && !['resolved', 'closed'].includes(t.status) ? `<button class="p" data-claim="${t.id}">Take</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="mut">No tickets here.</td></tr>'}</table></div>`;
   app.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { flt = b.dataset.f; homePage(); });
@@ -97,8 +161,8 @@ async function ticketPage(id) {
   <div class="card"><h3>Conversation</h3>${thread.map(m => `<div class="msg ${m.kind === 'internal' ? 'internal' : m.author_type}"><small><b>${m.kind === 'internal' ? 'INTERNAL NOTE (team only)' : esc(m.author)}</b> ${fmt(m.created_at)}</small><p>${esc(m.body)}</p></div>`).join('')}</div>
   ${!done ? `<div class="card"><div class="tabs"><button data-tab="reply" class="${tab === 'reply' ? 'on' : ''}">Reply to customer</button> <button data-tab="note" class="int ${tab === 'note' ? 'on int' : ''}">Internal note</button></div>
     ${tab === 'reply' ? (mine ? `<textarea id="txt" rows="4" placeholder="This is sent to the customer"></textarea><div class="row"><button class="p" id="send">Send reply</button><label><input type="checkbox" id="wait" style="width:auto;margin:0 4px 0 0">I asked a question: wait for the customer (pauses the clock)</label></div>` : '<p class="mut">Take this ticket to reply to the customer.</p>')
-      : `<textarea id="txt" rows="4" placeholder="Visible to the team only. The customer never sees this."></textarea><button id="send" style="background:#d19a00;border-color:#d19a00;color:#fff">Save internal note</button>`}</div>` : ''}
-  <div class="card"><h3>History (cannot be edited) ${ver.ok ? '<span style="font-size:13px;font-weight:normal;color:var(--grn);margin-left:8px">● History verified</span>' : `<span style="font-size:13px;font-weight:normal;color:var(--red);margin-left:8px">● History altered at event #${ver.brokenAtEventId ?? '?'}</span>`}</h3>${events.map(e => `<div class="ev"><b>${fmt(e.created_at)}</b> &middot; ${esc(e.actor_name)} (${e.actor_type}) &middot; <b>${esc(e.type)}</b> <span class="mut">${esc(Object.keys(e.detail).length ? JSON.stringify(e.detail) : '')}</span></div>`).join('')}</div>`;
+      : `<textarea id="txt" rows="4" placeholder="Visible to the team only. The customer never sees this."></textarea><button id="send" class="pn">Save internal note</button>`}</div>` : ''}
+  <div class="card"><h3>History (cannot be edited) ${ver.ok ? '<span style="font-size:13px;font-weight:normal;color:var(--grn);margin-left:8px">● History verified</span>' : `<span style="font-size:13px;font-weight:normal;color:var(--red);margin-left:8px">● History altered at event #${ver.brokenAtEventId ?? '?'}</span>`}</h3>${events.map(e => `<div class="ev"><time>${fmt(e.created_at)}</time><div><b>${esc(e.type.replace(/_/g, ' '))}</b> by ${esc(e.actor_name)} <span class="mut">(${e.actor_type})</span>${Object.keys(e.detail).length ? `<div class="mut sm">${esc(detailText(e.detail))}</div>` : ''}</div></div>`).join('')}</div>`;
   const again = () => ticketPage(id), $ = s => document.getElementById(s);
   if ($('claim')) $('claim').onclick = () => act(() => api(`/tickets/${id}/claim`, { method: 'POST' }), again);
   if ($('resolve')) $('resolve').onclick = () => act(() => api(`/tickets/${id}/resolve`, { method: 'POST' }), again);
@@ -111,7 +175,7 @@ async function reportPage() {
   if (!token) return loginPage();
   if (me.role !== 'manager') { app.innerHTML = '<div class="card">The late report is for the support lead.</div>'; return; }
   const rows = await api('/report/late');
-  app.innerHTML = `<div class="card"><h2>Late tickets</h2><p class="mut">Built from the permanent history. Lateness is in working minutes.</p><table>
+  app.innerHTML = `<div class="card scroll"><h2>Late tickets</h2><p class="mut">Built from the permanent history. Lateness is in working minutes.</p><table>
     <tr><th>Ticket</th><th>Priority</th><th>Missed</th><th>Was due</th><th>Late by</th><th>Agent</th><th>Why</th></tr>
     ${rows.map(r => `<tr><td><a href="#/t/${r.ticketId}">#${r.ticketId}</a> ${esc(r.subject)}</td><td>${esc(r.priority)}</td><td>${r.kind}</td><td>${fmt(r.due)}</td><td>${hm(r.lateWorkingMin)}</td><td>${esc(r.assignee || '-')}</td><td>${esc(r.why)}</td></tr>`).join('') || '<tr><td colspan="7" class="mut">No breaches recorded.</td></tr>'}</table></div>`;
 }
@@ -150,10 +214,10 @@ async function holidaysPage() {
   if (!token) return loginPage();
   if (me.role !== 'manager') { app.innerHTML = '<div class="card">Holidays are managed by the support lead.</div>'; return; }
   const rows = await api('/holidays');
-  app.innerHTML = `<div class="card"><h2>Holidays (no working time)</h2><p class="mut">Adding or removing a day recalculates the deadlines of open tickets. Each change is written to that ticket's history.</p>
+  app.innerHTML = `<div class="card scroll"><h2>Holidays (no working time)</h2><p class="mut">Adding or removing a day recalculates the deadlines of open tickets. Each change is written to that ticket's history.</p>
     <div class="row"><input id="hd" type="date" style="width:170px;margin:0"><input id="hn" placeholder="Name, e.g. Diwali" style="width:240px;margin:0"><button class="p" id="add">Add holiday</button></div><div class="err" id="e"></div>
     <table><tr><th>Date</th><th>Name</th><th></th></tr>${rows.map(r => `<tr><td>${esc(r.day)}</td><td>${esc(r.name || '')}</td><td><button data-del="${esc(r.day)}">Remove</button></td></tr>`).join('') || '<tr><td colspan="3" class="mut">No holidays.</td></tr>'}</table></div>`;
-  document.getElementById('add').onclick = () => act(() => api('/holidays', { method: 'POST', body: { day: document.getElementById('hd').value, name: document.getElementById('hn').value } }), holidaysPage);
+  document.getElementById('add').onclick = () => act(() => api('/holidays', { method: 'POST', body: { day: hd.value, name: hn.value } }), holidaysPage);
   app.querySelectorAll('[data-del]').forEach(b => b.onclick = () => act(() => api('/holidays/' + b.dataset.del, { method: 'DELETE' }), holidaysPage));
 }
 
@@ -259,7 +323,9 @@ async function render() {
   document.getElementById('who').innerHTML = me ? `${esc(me.name)} &middot; <a href="#/password">Password</a> &middot; <a href="#" id="lo">Sign out</a>` : '';
   document.getElementById('mgr').innerHTML = me && me.role === 'manager' ? '<a href="#/report">Late report</a> <a href="#/holidays">Holidays</a> <a href="#/sla">SLA targets</a> <a href="#/people">People</a>' : '';
   const lo = document.getElementById('lo'); if (lo) lo.onclick = e => { e.preventDefault(); logout(); };
+  markNav();
   const [path, qs] = (location.hash.slice(1) || '/').split('?'), [, a, b] = path.split('/'), q = new URLSearchParams(qs || '');
+  document.body.classList.toggle('public', !token && (a === 'c' || a === 'new'));
   try {
     if (a === 't') await ticketPage(+b); else if (a === 'report') await reportPage(); else if (a === 'new') await newTicketPage(q.get('from')); else if (a === 'holidays') await holidaysPage(); else if (a === 'sla') await slaPage(); else if (a === 'password') passwordPage(); else if (a === 'people') await peoplePage(); else if (a === 'c') await customerPage(b); else await homePage();
   } catch (e) { app.innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
