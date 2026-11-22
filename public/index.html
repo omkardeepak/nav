@@ -21,6 +21,7 @@ header #who a{padding:0 6px;border:0;text-decoration:underline;text-underline-of
 body.public header a[href="#/"]{display:none}
 main{max-width:1080px;margin:24px auto 56px;padding:0 20px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:16px 18px;margin-bottom:16px}
+.narrow{margin:4vh auto 16px}
 .scroll{overflow-x:auto}.scroll table{min-width:600px}
 h2{margin:0 0 12px;font-size:20px;line-height:1.25;font-weight:650}
 h3{margin:0 0 10px;font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
@@ -114,7 +115,7 @@ function markNav() {
 
 async function loginPage() {
   const agents = await api('/agents');
-  app.innerHTML = `<div class="card" style="max-width:380px"><h2>Agent sign in</h2><label>Agent</label>
+  app.innerHTML = `<div class="card narrow" style="max-width:380px"><h2>Agent sign in</h2><label>Agent</label>
     <select id="ag" style="width:100%;margin:3px 0 10px">${agents.map(a => `<option value="${a.id}">${esc(a.name)}${a.role === 'manager' ? ' (support lead)' : ''}</option>`).join('')}</select>
     <label>Password (demo: frontdesk)</label><input id="pw" type="password"><button class="p" id="go">Sign in</button><div class="err" id="e"></div></div>`;
   document.getElementById('go').onclick = async () => {
@@ -181,7 +182,7 @@ async function reportPage() {
 }
 
 async function newTicketPage(from) {
-  app.innerHTML = `<div class="card" style="max-width:520px"><h2>Contact Arvo Support</h2><p class="mut" id="fu"></p>
+  app.innerHTML = `<div class="card narrow" style="max-width:520px"><h2>Contact Arvo Support</h2><p class="mut" id="fu"></p>
     <label>Your name</label><input id="n"><label>Email</label><input id="em" type="email"><label>Subject</label><input id="s">
     <label>How bad is it?</label><select id="p" style="width:100%;margin:3px 0 10px"><option value="critical">I cannot work at all</option><option value="medium" selected>Something is broken, I can work around it</option><option value="low">A question or small request</option></select>
     <label>Describe the problem</label><textarea id="b" rows="5"></textarea><button class="p" id="go">Send</button><div class="err" id="e"></div></div>`;
@@ -201,7 +202,7 @@ async function newTicketPage(from) {
 async function customerPage(tk) {
   const { ticket: t, messages } = await api('/customer/tickets/' + tk);
   const done = ['resolved', 'closed'].includes(t.status);
-  app.innerHTML = `<div class="card" style="max-width:640px"><h2>${esc(t.subject)}</h2><p class="mut">Status: ${esc(t.status)}. Keep this page's link to come back.</p>
+  app.innerHTML = `<div class="card narrow" style="max-width:640px"><h2>${esc(t.subject)}</h2><p class="mut">Status: ${esc(t.status)}. Keep this page's link to come back.</p>
     ${messages.map(m => `<div class="msg ${m.author_type}"><small><b>${esc(m.author)}</b> ${fmt(m.created_at)}</small><p>${esc(m.body)}</p></div>`).join('')}
     ${!done ? '<textarea id="b" rows="3" placeholder="Write a reply"></textarea><button class="p" id="go">Send reply</button>'
       : t.canReopen ? `<p>Not fixed? You can reopen this ticket until ${fmt(t.reopenUntil)}.</p><textarea id="b" rows="3" placeholder="What is still wrong?"></textarea><button class="p" id="go">Reopen ticket</button>`
@@ -311,10 +312,10 @@ async function slaPage() {
 
 function passwordPage() {
   if (!token) return loginPage();
-  app.innerHTML = `<div class="card" style="max-width:380px"><h2>Change password</h2><label>Current password</label><input id="cp" type="password">
+  app.innerHTML = `<div class="card narrow" style="max-width:380px"><h2>Change password</h2><label>Current password</label><input id="cp" type="password">
     <label>New password (8+ characters)</label><input id="np" type="password"><button class="p" id="go">Change password</button><div class="err" id="e"></div></div>`;
   document.getElementById('go').onclick = async () => {
-    try { await api('/me/password', { method: 'POST', body: { current: document.getElementById('cp').value, password: document.getElementById('np').value } }); app.innerHTML = '<div class="card">Password changed. Other sessions were signed out.</div>'; }
+    try { await api('/me/password', { method: 'POST', body: { current: document.getElementById('cp').value, password: document.getElementById('np').value } }); app.innerHTML = '<div class="card narrow" style="max-width:380px">Password changed. Other sessions were signed out.</div>'; }
     catch (e) { document.getElementById('e').textContent = e.message; }
   };
 }
