@@ -182,6 +182,66 @@ async function peoplePage() {
   });
 }
 
+async function slaPage() {
+  if (!token) return loginPage();
+  if (me.role !== 'manager') { app.innerHTML = '<div class="card">SLA target configuration is for the support lead.</div>'; return; }
+  const policies = await api('/sla');
+  app.innerHTML = `<div class="card"><h2>SLA Targets</h2>
+    <p class="mut"><b>Important:</b> Changes apply only to tickets created or reopened from now on. Existing tickets keep their deadlines.</p>
+    <div id="sla-msg" style="display:none;margin-bottom:12px;padding:12px;background:#eef7ee;border:1px solid #7bc67b;border-radius:4px">Target updated successfully.</div>
+    <div class="err" id="e"></div>
+    <table>
+      <tr><th>Priority</th><th>First reply target</th><th>Resolution target</th><th></th></tr>
+      ${policies.map(p => `
+        <tr data-prio="${p.priority}">
+          <td><b>${esc(p.priority)}</b><br><span class="mut">${esc(p.label)}</span></td>
+          <td>
+            <div class="row">
+              <input type="number" id="rep-${p.priority}" value="${p.reply_min}" min="15" max="4320" style="width:100px;margin:0"> min
+            </div>
+            <small class="mut">${hm(p.reply_min)} working time</small>
+          </td>
+          <td>
+            <label style="display:block;margin-bottom:4px">
+              <input type="checkbox" id="res-null-${p.priority}" ${p.resolve_min === null ? 'checked' : ''} style="width:auto;margin:0 4px 0 0">
+              End of same working day
+            </label>
+            <div id="res-box-${p.priority}" class="row" style="${p.resolve_min === null ? 'display:none' : ''}">
+              <input type="number" id="res-${p.priority}" value="${p.resolve_min || ''}" min="15" max="14400" style="width:100px;margin:0"> min
+              <br><small class="mut">${p.resolve_min ? hm(p.resolve_min) + ' working time' : ''}</small>
+            </div>
+          </td>
+          <td><button class="p" data-save-sla="${p.priority}">Save</button></td>
+        </tr>
+      `).join('')}
+    </table>
+  </div>`;
+
+  policies.forEach(p => {
+    const chk = document.getElementById(`res-null-${p.priority}`);
+    const box = document.getElementById(`res-box-${p.priority}`);
+    if (chk && box) chk.onchange = () => { box.style.display = chk.checked ? 'none' : 'flex'; };
+  });
+
+  app.querySelectorAll('[data-save-sla]').forEach(btn => {
+    btn.onclick = async () => {
+      const prio = btn.dataset.saveSla;
+      const repVal = parseInt(document.getElementById(`rep-${prio}`).value, 10);
+      const isNull = document.getElementById(`res-null-${prio}`).checked;
+      const resVal = isNull ? null : parseInt(document.getElementById(`res-${prio}`).value, 10);
+      try {
+        document.getElementById('e').textContent = '';
+        await api('/sla/' + prio, { method: 'PUT', body: { reply_min: repVal, resolve_min: resVal } });
+        await slaPage();
+        const msg = document.getElementById('sla-msg');
+        if (msg) msg.style.display = 'block';
+      } catch (err) {
+        document.getElementById('e').textContent = err.message;
+      }
+    };
+  });
+}
+
 function passwordPage() {
   if (!token) return loginPage();
   app.innerHTML = `<div class="card" style="max-width:380px"><h2>Change password</h2><label>Current password</label><input id="cp" type="password">
@@ -194,11 +254,11 @@ function passwordPage() {
 
 async function render() {
   document.getElementById('who').innerHTML = me ? `${esc(me.name)} &middot; <a href="#/password">Password</a> &middot; <a href="#" id="lo">Sign out</a>` : '';
-  document.getElementById('mgr').innerHTML = me && me.role === 'manager' ? '<a href="#/report">Late report</a> <a href="#/holidays">Holidays</a> <a href="#/people">People</a>' : '';
+  document.getElementById('mgr').innerHTML = me && me.role === 'manager' ? '<a href="#/report">Late report</a> <a href="#/holidays">Holidays</a> <a href="#/sla">SLA targets</a> <a href="#/people">People</a>' : '';
   const lo = document.getElementById('lo'); if (lo) lo.onclick = e => { e.preventDefault(); logout(); };
   const [path, qs] = (location.hash.slice(1) || '/').split('?'), [, a, b] = path.split('/'), q = new URLSearchParams(qs || '');
   try {
-    if (a === 't') await ticketPage(+b); else if (a === 'report') await reportPage(); else if (a === 'new') await newTicketPage(q.get('from')); else if (a === 'holidays') await holidaysPage(); else if (a === 'password') passwordPage(); else if (a === 'people') await peoplePage(); else if (a === 'c') await customerPage(b); else await homePage();
+    if (a === 't') await ticketPage(+b); else if (a === 'report') await reportPage(); else if (a === 'new') await newTicketPage(q.get('from')); else if (a === 'holidays') await holidaysPage(); else if (a === 'sla') await slaPage(); else if (a === 'password') passwordPage(); else if (a === 'people') await peoplePage(); else if (a === 'c') await customerPage(b); else await homePage();
   } catch (e) { app.innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
 }
 addEventListener('hashchange', render); render();

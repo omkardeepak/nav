@@ -39,15 +39,17 @@ CREATE TABLE IF NOT EXISTS ticket_events (
   actor_id INT, actor_name TEXT NOT NULL, detail JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE IF NOT EXISTS account_events (
-  id BIGSERIAL PRIMARY KEY, agent_id INT NOT NULL REFERENCES agents(id),
+  id BIGSERIAL PRIMARY KEY, agent_id INT REFERENCES agents(id),
   type TEXT NOT NULL, actor_id INT REFERENCES agents(id),
-  actor_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL
+  actor_name TEXT NOT NULL, detail JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL
 );
 
 -- migrations (safe to re-run)
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'agent';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS password_hash TEXT;
 ALTER TABLE tickets ADD COLUMN IF NOT EXISTS previous_ticket_id INT REFERENCES tickets(id);
+ALTER TABLE account_events ADD COLUMN IF NOT EXISTS detail JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE account_events ALTER COLUMN agent_id DROP NOT NULL;
 
 -- Append-only: history cannot be edited or deleted (INC-0318)
 CREATE OR REPLACE FUNCTION forbid_change() RETURNS trigger AS $$

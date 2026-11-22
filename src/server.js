@@ -343,6 +343,37 @@ app.delete('/api/holidays/:day', auth, manager, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ----- manager: SLA targets. Changes apply only to new/reopened tickets. -----
+app.get('/api/sla', auth, manager, wrap(async (req, res) =>
+  res.json((await pool.query("SELECT priority, reply_min, resolve_min, label FROM sla_policies ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END")).rows)));
+
+app.put('/api/sla/:priority', auth, manager, wrap(async (req, res) => {
+  const prio = req.params.priority;
+  if (!['critical', 'medium', 'low'].includes(prio)) fail(400, 'Invalid priority');
+  const { reply_min, resolve_min } = req.body || {};
+  if (typeof reply_min !== 'number' || !Number.isInteger(reply_min) || reply_min < 15 || reply_min > 4320)
+    fail(400, 'reply_min must be an integer between 15 and 4320');
+  if (resolve_min !== null && (typeof resolve_min !== 'number' || !Number.isInteger(resolve_min) || resolve_min < reply_min || resolve_min > 14400))
+    fail(400, 'resolve_min must be null or an integer between reply_min and 14400');
+
+  const now = new Date();
+  await tx(async c => {
+    const old = (await c.query('SELECT reply_min, resolve_min FROM sla_policies WHERE priority=$1', [prio])).rows[0];
+    if (!old) fail(400, 'Priority not found');
+    await c.query('UPDATE sla_policies SET reply_min=$2, resolve_min=$3 WHERE priority=$1', [prio, reply_min, resolve_min]);
+    await c.query(
+      "INSERT INTO account_events(type, actor_id, actor_name, detail, created_at) VALUES('sla_change', $1, $2, $3, $4)",
+      [
+        req.agent.id,
+        req.agent.name,
+        JSON.stringify({ priority: prio, from: { reply_min: old.reply_min, resolve_min: old.resolve_min }, to: { reply_min, resolve_min } }),
+        now
+      ]
+    );
+  });
+  res.json({ ok: true });
+}));
+
 // ----- customer (no login; the ticket token is the credential). Only SELECTs the messages table. -----
 app.post('/api/customer/tickets', wrap(async (req, res) => {
   const t = await tx(c => createTicket(c, { name: text(req.body.name, 100), email: text(req.body.email, 200), subject: text(req.body.subject, 200), body: text(req.body.body), priority: String(req.body.priority), previousToken: req.body.previousToken ? String(req.body.previousToken) : null }));
