@@ -9,15 +9,23 @@ export DATABASE_URL=postgres://user:pass@localhost:5432/frontdesk   # empty data
 npm start            # creates tables, SLA policies, holidays, 9 agents, 3 sample tickets
 npm test             # unit tests always; API tests when DATABASE_URL is set
 ```
-Open http://localhost:3000. Agent password for the demo is `frontdesk` (env `AGENT_PASSWORD`).
+Open http://localhost:3000. Every account starts with the password `frontdesk` (env `AGENT_PASSWORD` sets that starting password). Each person has their own password and can change it at `/#/password`. **Meera is the support lead (manager)**; the other 9 are agents.
 Customer pages: `/#/new` creates a ticket; the ticket link `/#/c/<token>` is the customer's access. Sample tickets' links are printed in the server log on first start.
 Hosted DBs that need SSL (Render, Railway): set `PGSSL=1`. Set `SEED_SAMPLE=0` to skip sample tickets.
+
+## Who can do what
+| Role | Can |
+|---|---|
+| Agent (9) | See all tickets, take a ticket, reply (only on tickets they took), write internal notes, ask a question and wait, change priority, resolve, read history, change own password |
+| Support lead (Meera) | Everything an agent can, plus the **late report**, the **holidays** page, and **reset an agent's password** |
+| Customer | No login. Creates a ticket, replies, reopens within 7 days using the secret ticket link |
+| System | Records SLA breaches and auto-closes; appears as "system" in the history |
 
 ## Run with Docker
 ```bash
 docker compose up --build
 ```
-Open http://localhost:3000. Agent password for the demo is `frontdesk` (env `AGENT_PASSWORD`).
+Open http://localhost:3000. Every account starts with the password `frontdesk`. Meera is the support lead.
 
 To run the test suite with Docker:
 ```bash
@@ -27,14 +35,14 @@ docker compose --profile test run --rm test
 ```
 
 ## Pages
-`/#/` agent ticket list (Late / Waiting on customer / Due soon badges, Take button) · `/#/t/:id` ticket (Reply to customer tab, separate Internal note tab, history) · `/#/report` late-ticket report · `/#/new` and `/#/c/:token` customer pages.
+`/#/` ticket list (Late / Waiting on customer / Due soon badges, Take button) · `/#/t/:id` ticket (Reply to customer tab, separate Internal note tab, history) · `/#/password` · lead only: `/#/report` (late tickets, which target, how late, why), `/#/holidays`, and `/#/people` · customer: `/#/new` and `/#/c/:token`.
 
 ## How each incident is handled
 | Incident | Fix |
 |---|---|
 | INC-0291 two agents take one ticket | Claim is one atomic `UPDATE ... WHERE assignee_id IS NULL`; loser gets 409 "Already taken by X". Only the assigned agent can reply. Tested with two simultaneous requests. |
 | INC-0304 note reached the customer | Notes are in their own table (`internal_notes`). Customer endpoints only query `messages` and select named columns, so a note cannot be returned by them. Tested. |
-| INC-0318 no proof of what happened | `ticket_events` is append-only (DB triggers block UPDATE/DELETE/TRUNCATE, also on messages and notes). Every row has actor, server-side time and detail. Clients never send timestamps. First reply is its own event; internal notes do not count as a reply. |
+| INC-0318 no proof of what happened | `ticket_events` is append-only (DB triggers block UPDATE/DELETE/TRUNCATE, also on messages, notes, and account_events). Every row has actor, server-side time and detail. Clients never send timestamps. First reply is its own event; internal notes do not count as a reply. |
 
 ## Decisions I made (the document leaves these open)
 | Question | Decision |
@@ -50,7 +58,10 @@ docker compose --profile test run --rm test
 | Reopen | Customer can reopen within 7 calendar days of resolved or auto-closed. After that: 410 and "create a new ticket". Reopen restarts both SLA clocks from the reopen time. |
 | **Priority change mid-way** | Deadlines are recalculated from the **original start** with the new priority, keeping paused time. The clock does not restart (otherwise raising then lowering priority could hide lateness). If the new deadline is already past, the ticket becomes late at once. Event logged with old and new deadlines. Breaches already recorded stay. |
 | Breach record | When a deadline is missed, a `sla_breach` event is written once (by a background check every 60s, and at reply/resolve time), with how late and the paused time. The report reads these events. |
-| Identity | Agents pick their name + shared demo password. Customers use the secret link of their ticket. |
+| Identity | Each agent has their own salted-hash password (scrypt), 12-hour sessions, and a lock after 10 wrong tries in 15 minutes. Customers use the secret link of their ticket. |
+| Manager | One role, "manager" (Meera): only she sees the late report, edits holidays, and can reset an agent's password. She is not one of the 9 agents. |
+| Holidays | Managed on the holidays page. Adding or removing a day **recalculates the deadlines of open tickets**, and each change is written to that ticket's history as `deadline_recalculated` with the old and new deadlines. |
+| New ticket after the window | A link on the closed ticket page creates a new ticket that is **linked** to the old one (`previous_ticket_id`), shown on both tickets for agents. Customers never see the old conversation on the new ticket. |
 
 ## Deploy
 
@@ -74,12 +85,9 @@ Live URL: `https://<your-render-subdomain>.onrender.com`
 - **Keep-Alive Suggestion**: To prevent the instance from sleeping during reviewer evaluation, set up a free external uptime monitor (such as [UptimeRobot](https://uptimerobot.com), [BetterStack](https://betterstack.com), or [cron-job.org](https://cron-job.org)) to send an HTTP GET request to `https://<your-render-subdomain>.onrender.com/healthz` every 10 minutes. The unauthenticated `/healthz` endpoint executes `SELECT 1`, keeping both the web service and the PostgreSQL database warm without any code modifications.
 
 ## Short note: what I did not finish, and why
-- **Not deployed.** I built and tested everything locally; the live URL still needs the 10-minute Render/Railway step above.
-- **Real login:** shared demo password and a session token. No per-agent passwords, no rate limiting.
-- **No manager role:** any signed-in agent can open the late report.
-- **No email notifications** and no customer reply by email.
-- **New-ticket-after-window** is a fresh ticket; it is not linked back to the old one.
-- **Holidays** are a small seeded sample list (no admin screen). Edit the `holidays` table.
-- **Breach timing:** a breach is recorded when detected (within about a minute, or at the agent's reply). On free hosting that sleeps, the check runs when the app wakes or someone opens the list, so a sleeping app can record it late. The "late by" number is still measured against the real deadline.
-- **No tamper-evident hash chain** on the event log; protection is database triggers only (a database owner could still drop them).
+Everything in the story's rules is built and tested. What is left is lower priority:
+- **No email notifications.** Customers get no email when an agent replies; they must reopen their ticket link. Needs an email provider, which is outside the 8 hours.
+- **No tamper-evident hash chain** on the event log. Database triggers stop edits and deletes, but a database owner could still drop the triggers.
+- **SLA targets are edited in the `sla_policies` table**, not on a screen (holidays do have a screen).
+- **Free-tier hosting sleeps** after inactivity. The breach and auto-close check also runs when the list or report is opened, so nothing is lost, but it may be recorded a little late.
 - **Not done:** search, pagination, attachments, edit of tickets by customer.
