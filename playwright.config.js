@@ -27,7 +27,7 @@ module.exports = defineConfig({
     timeout: 30000,
     env: {
       PORT: '3000',
-      DATABASE_URL: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/frontdesk',
+      DATABASE_URL: process.env.DATABASE_URL || 'postgres://frontdesk:frontdesk@localhost:5432/frontdesk',
     },
   },
 });

@@ -1,7 +1,7 @@
 const { Pool } = require('pg');
 const path = require('path');
 
-const databaseUrl = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/frontdesk';
+const databaseUrl = process.env.DATABASE_URL || 'postgres://frontdesk:frontdesk@localhost:5432/frontdesk';
 
 async function main() {
   console.log('Connecting to database:', databaseUrl);

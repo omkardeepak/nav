@@ -13,8 +13,8 @@ test.describe.serial('Frontdesk E2E Tests', () => {
     page.on('console', msg => {
       if (msg.type() === 'error') {
         const text = msg.text();
-        // Ignore expected HTTP 409 Conflict network log from intentional concurrent claim
-        if (text.includes('409 (Conflict)')) return;
+        // Ignore expected HTTP network errors from intentional negative assertions (409 concurrent claim, 401 wrong password)
+        if (text.includes('409 (Conflict)') || text.includes('401 (Unauthorized)')) return;
         consoleErrors.push(text);
       }
     });
@@ -195,6 +195,7 @@ test.describe.serial('Frontdesk E2E Tests', () => {
       await ashaPage.selectOption('#ag', { label: 'Asha' });
       await ashaPage.fill('#pw', 'frontdesk');
       await ashaPage.click('#go');
+      await expect(ashaPage.locator('h2')).toContainText('Tickets');
 
       await ashaPage.goto(`/#/t/${createdTicketId}`);
       await expect(ashaPage.locator('#send')).toHaveText('Send reply');
@@ -239,6 +240,7 @@ test.describe.serial('Frontdesk E2E Tests', () => {
       await ashaPage2.selectOption('#ag', { label: 'Asha' });
       await ashaPage2.fill('#pw', 'frontdesk');
       await ashaPage2.click('#go');
+      await expect(ashaPage2.locator('h2')).toContainText('Tickets');
 
       await ashaPage2.click('button[data-f="all"]');
       const ticketRow = ashaPage2.locator(`tr:has(a[href="#/t/${createdTicketId}"])`);
@@ -249,16 +251,18 @@ test.describe.serial('Frontdesk E2E Tests', () => {
     }
   });
 
-  test('5. Seeded critical ticket from 3 days ago shows the "Late" badge, and appears in /#/report', async ({ browser }) => {
+  test('5. Seeded critical ticket shows "Late" badge; Asha cannot view late report; Meera sees report & holiday links and late tickets', async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
     trackErrors(page);
 
     try {
+      // 1. Asha signs in
       await page.goto('/#/');
       await page.selectOption('#ag', { label: 'Asha' });
       await page.fill('#pw', 'frontdesk');
       await page.click('#go');
+      await expect(page.locator('h2')).toContainText('Tickets');
 
       // In All tickets list, ticket #1 (seeded critical 3 days ago) shows "Late" badge
       await page.click('button[data-f="all"]');
@@ -267,7 +271,30 @@ test.describe.serial('Frontdesk E2E Tests', () => {
       await expect(seededRow).toContainText('Whole team cannot log in');
       await expect(seededRow.locator('.b.late')).toHaveText('Late');
 
-      // Navigate to /#/report and check late report
+      // Asha sees neither report nor holiday links
+      await expect(page.locator('header a[href="#/report"]')).toHaveCount(0);
+      await expect(page.locator('header a[href="#/holidays"]')).toHaveCount(0);
+
+      // Asha opening /#/report sees "The late report is for the support lead"
+      await page.goto('/#/report');
+      await expect(page.locator('.card')).toContainText('The late report is for the support lead');
+
+      // Asha signs out
+      await page.click('#lo');
+
+      // 2. Meera signs in
+      await page.goto('/#/');
+      await expect(page.locator('h2')).toContainText('Agent sign in');
+      await page.selectOption('#ag', { label: 'Meera (support lead)' });
+      await page.fill('#pw', 'frontdesk');
+      await page.click('#go');
+      await expect(page.locator('h2')).toContainText('Tickets');
+
+      // Meera sees both report and holiday links (and people link)
+      await expect(page.locator('header a[href="#/report"]')).toBeVisible();
+      await expect(page.locator('header a[href="#/holidays"]')).toBeVisible();
+
+      // Meera opens /#/report and sees the late ticket report
       await page.click('header a[href="#/report"]');
       await page.waitForURL(/#\/report/);
       await expect(page.locator('h2')).toContainText('Late tickets');
@@ -281,7 +308,100 @@ test.describe.serial('Frontdesk E2E Tests', () => {
     }
   });
 
-  test('6. Assert there are no console errors on each page', async ({ browser }) => {
+  test('6. Meera adds a holiday, sees it listed, then deletes it', async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    trackErrors(page);
+
+    try {
+      await page.goto('/#/');
+      await page.selectOption('#ag', { label: 'Meera (support lead)' });
+      await page.fill('#pw', 'frontdesk');
+      await page.click('#go');
+      await expect(page.locator('h2')).toContainText('Tickets');
+
+      await page.click('header a[href="#/holidays"]');
+      await page.waitForURL(/#\/holidays/);
+      await expect(page.locator('h2')).toContainText('Holidays');
+
+      // Add a holiday
+      await page.fill('#hd', '2026-11-25');
+      await page.fill('#hn', 'Test Holiday');
+      await page.click('#add');
+
+      // Verify it appears in the table
+      const holidayRow = page.locator('tr:has-text("Test Holiday")');
+      await expect(holidayRow).toBeVisible();
+      await expect(holidayRow).toContainText('2026-11-25');
+
+      // Remove the holiday
+      const delBtn = page.locator('button[data-del="2026-11-25"]');
+      await expect(delBtn).toBeVisible();
+      await delBtn.click();
+
+      // Verify it was removed
+      await expect(page.locator('tr:has-text("Test Holiday")')).toHaveCount(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('7. Meera resets Bilal\'s password; Bilal signs in with it, and the old password fails', async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    trackErrors(page);
+
+    let newPassword = '';
+    try {
+      // 1. Meera logs in and navigates to /#/people
+      await page.goto('/#/');
+      await page.selectOption('#ag', { label: 'Meera (support lead)' });
+      await page.fill('#pw', 'frontdesk');
+      await page.click('#go');
+      await expect(page.locator('h2')).toContainText('Tickets');
+
+      await page.click('header a[href="#/people"]');
+      await page.waitForURL(/#\/people/);
+      await expect(page.locator('h2')).toContainText('People');
+
+      // Reset Bilal's password
+      const bilalRow = page.locator('tr:has-text("Bilal")');
+      await expect(bilalRow).toBeVisible();
+      const resetBtn = bilalRow.locator('button[data-reset]');
+      await resetBtn.click();
+
+      // Success box appears with new password
+      const resetBox = page.locator('#reset-box');
+      await expect(resetBox).toBeVisible();
+      newPassword = (await page.locator('#new-pw').textContent() || '').trim();
+      expect(newPassword.length).toBeGreaterThanOrEqual(12);
+
+      // Sign out
+      await page.click('#lo');
+
+      // 2. Bilal tries to log in with old password -> fails
+      await page.selectOption('#ag', { label: 'Bilal' });
+      await page.fill('#pw', 'frontdesk');
+      await page.click('#go');
+      await expect(page.locator('#e')).toContainText('Wrong agent or password');
+
+      // 3. Bilal logs in with new password -> succeeds
+      await page.fill('#pw', newPassword);
+      await page.click('#go');
+      await expect(page.locator('h2')).toContainText('Tickets');
+
+      // Clean up: Bilal changes password back to frontdesk at /#/password
+      await page.click('header a[href="#/password"]');
+      await page.fill('#cp', newPassword);
+      await page.fill('#np', 'frontdesk');
+      await page.click('#go');
+      await expect(page.locator('.card')).toContainText('Password changed');
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('8. Assert there are no console errors on each page', async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
     trackErrors(page);
@@ -309,11 +429,32 @@ test.describe.serial('Frontdesk E2E Tests', () => {
       await page.goto('/#/t/1');
       await expect(page.locator('h2')).toContainText('Whole team cannot log in');
 
-      // 5. /#/report (Late report)
+      // 5. /#/password
+      await page.goto('/#/password');
+      await expect(page.locator('h2')).toContainText('Change password');
+
+      // Sign out Asha, Sign in Meera
+      await page.click('#lo');
+      await page.goto('/#/');
+      await expect(page.locator('h2')).toContainText('Agent sign in');
+      await page.selectOption('#ag', { label: 'Meera (support lead)' });
+      await page.fill('#pw', 'frontdesk');
+      await page.click('#go');
+      await expect(page.locator('h2')).toContainText('Tickets');
+
+      // 6. /#/report (Late report)
       await page.goto('/#/report');
       await expect(page.locator('h2')).toContainText('Late tickets');
 
-      // 6. /#/c/<token> (Customer page)
+      // 7. /#/holidays
+      await page.goto('/#/holidays');
+      await expect(page.locator('h2')).toContainText('Holidays');
+
+      // 8. /#/people
+      await page.goto('/#/people');
+      await expect(page.locator('h2')).toContainText('People');
+
+      // 9. /#/c/<token> (Customer page)
       await page.goto(`/#/c/${createdToken}`);
       await expect(page.locator('h2')).toContainText('Production system offline');
     } finally {
