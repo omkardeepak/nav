@@ -25,11 +25,11 @@ label{font-size:13px;color:var(--mut)}.row{display:flex;gap:8px;flex-wrap:wrap;a
 .mut{color:var(--mut)}.err{color:var(--red);margin:6px 0}.ev{font-size:13px;padding:3px 0;border-bottom:1px dotted var(--line)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px}
 </style></head><body>
-<header><b>Frontdesk</b><a href="#/">Tickets</a><a href="#/report">Late report</a><a href="#/new">Customer: new ticket</a><span id="who"></span></header>
+<header><b>Frontdesk</b><a href="#/">Tickets</a><span id="mgr"></span><a href="#/new">Customer: new ticket</a><span id="who"></span></header>
 <main id="app"></main>
 <script>
 const app = document.getElementById('app');
-let token = localStorage.getItem('tok'), me = JSON.parse(localStorage.getItem('me') || 'null'), flt = 'mine', tab = 'reply';
+let token = localStorage.getItem('tok'), me = JSON.parse(localStorage.getItem('me') || 'null'), flt = 'mine', fltSet = false, tab = 'reply';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = d => d ? new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) : '-';
 const hm = m => { m = Math.abs(Math.round(m)); return (m >= 60 ? Math.floor(m / 60) + 'h ' : '') + (m % 60) + 'm'; };
@@ -41,7 +41,7 @@ async function api(p, o = {}) {
   if (!r.ok) throw new Error(j.error || 'Request failed');
   return j;
 }
-function logout() { token = null; me = null; localStorage.clear(); render(); }
+function logout() { token = null; me = null; localStorage.clear(); location.hash = '#/'; render(); }
 let lastActionError = '';
 const act = async (fn, again) => { try { lastActionError = ''; await fn(); } catch (e) { lastActionError = e.message; alert(e.message); } again ? again() : render(); };
 const badges = t => [
@@ -51,7 +51,7 @@ const badges = t => [
 async function loginPage() {
   const agents = await api('/agents');
   app.innerHTML = `<div class="card" style="max-width:380px"><h2>Agent sign in</h2><label>Agent</label>
-    <select id="ag" style="width:100%;margin:3px 0 10px">${agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>
+    <select id="ag" style="width:100%;margin:3px 0 10px">${agents.map(a => `<option value="${a.id}">${esc(a.name)}${a.role === 'manager' ? ' (support lead)' : ''}</option>`).join('')}</select>
     <label>Password (demo: frontdesk)</label><input id="pw" type="password"><button class="p" id="go">Sign in</button><div class="err" id="e"></div></div>`;
   document.getElementById('go').onclick = async () => {
     try { const r = await api('/login', { method: 'POST', body: { agentId: document.getElementById('ag').value, password: document.getElementById('pw').value } });
@@ -62,6 +62,7 @@ async function loginPage() {
 
 async function homePage() {
   if (!token) return loginPage();
+  if (me && me.role === 'manager' && !fltSet) { flt = 'all'; fltSet = true; }
   let list = await api('/tickets');
   const open = list.filter(t => !['resolved', 'closed'].includes(t.status));
   const shown = flt === 'mine' ? open.filter(t => t.assignee_id === me.id) : flt === 'unassigned' ? open.filter(t => !t.assignee_id) : flt === 'done' ? list.filter(t => ['resolved', 'closed'].includes(t.status)) : open;
@@ -79,10 +80,10 @@ async function homePage() {
 
 async function ticketPage(id) {
   if (!token) return loginPage();
-  const { ticket: t, thread, events } = await api('/tickets/' + id);
+  const { ticket: t, thread, events, followUps } = await api('/tickets/' + id);
   const mine = t.assignee_id === me.id, done = ['resolved', 'closed'].includes(t.status);
   app.innerHTML = `<p><a href="#/">&larr; Tickets</a></p>
-  <div class="card"><h2>#${t.id} ${esc(t.subject)}</h2><div>${badges(t)}</div>
+  <div class="card"><h2>#${t.id} ${esc(t.subject)}</h2><div>${badges(t)}</div>${t.previous_ticket_id ? `<p class="mut">Follow-up to <a href="#/t/${t.previous_ticket_id}">#${t.previous_ticket_id}</a></p>` : ''}${followUps.length ? `<p class="mut">Follow-up ticket: ${followUps.map(f => `<a href="#/t/${f}">#${f}</a>`).join(', ')}</p>` : ''}
     <div class="grid" style="margin-top:8px"><div><label>Customer</label><br>${esc(t.customer_name)}</div><div><label>Assigned to</label><br>${esc(t.assignee_name || 'Nobody yet')}</div>
     <div><label>First reply due</label><br>${t.first_response_at ? 'Replied ' + fmt(t.first_response_at) : fmt(t.reply_due)}</div><div><label>Resolution due</label><br>${fmt(t.resolve_due)}</div>
     <div><label>Paused (working min)</label><br>${t.paused ? 'Paused now' : ''} ${t.paused_total_min}</div></div>
@@ -105,20 +106,27 @@ async function ticketPage(id) {
 
 async function reportPage() {
   if (!token) return loginPage();
+  if (me.role !== 'manager') { app.innerHTML = '<div class="card">The late report is for the support lead.</div>'; return; }
   const rows = await api('/report/late');
   app.innerHTML = `<div class="card"><h2>Late tickets</h2><p class="mut">Built from the permanent history. Lateness is in working minutes.</p><table>
     <tr><th>Ticket</th><th>Priority</th><th>Missed</th><th>Was due</th><th>Late by</th><th>Agent</th><th>Why</th></tr>
     ${rows.map(r => `<tr><td><a href="#/t/${r.ticketId}">#${r.ticketId}</a> ${esc(r.subject)}</td><td>${esc(r.priority)}</td><td>${r.kind}</td><td>${fmt(r.due)}</td><td>${hm(r.lateWorkingMin)}</td><td>${esc(r.assignee || '-')}</td><td>${esc(r.why)}</td></tr>`).join('') || '<tr><td colspan="7" class="mut">No breaches recorded.</td></tr>'}</table></div>`;
 }
 
-function newTicketPage() {
-  app.innerHTML = `<div class="card" style="max-width:520px"><h2>Contact Arvo Support</h2>
+async function newTicketPage(from) {
+  app.innerHTML = `<div class="card" style="max-width:520px"><h2>Contact Arvo Support</h2><p class="mut" id="fu"></p>
     <label>Your name</label><input id="n"><label>Email</label><input id="em" type="email"><label>Subject</label><input id="s">
     <label>How bad is it?</label><select id="p" style="width:100%;margin:3px 0 10px"><option value="critical">I cannot work at all</option><option value="medium" selected>Something is broken, I can work around it</option><option value="low">A question or small request</option></select>
     <label>Describe the problem</label><textarea id="b" rows="5"></textarea><button class="p" id="go">Send</button><div class="err" id="e"></div></div>`;
+  if (from) {
+    try {
+      const { ticket } = await api('/customer/tickets/' + from);
+      if (['resolved', 'closed'].includes(ticket.status)) { document.getElementById('n').value = ticket.customerName; document.getElementById('em').value = ticket.customerEmail; document.getElementById('s').value = 'Follow-up: ' + ticket.subject; document.getElementById('fu').textContent = 'This new ticket will be linked to your earlier one.'; } else from = null;
+    } catch { from = null; }
+  }
   document.getElementById('go').onclick = async () => {
     const $ = s => document.getElementById(s);
-    try { const r = await api('/customer/tickets', { method: 'POST', body: { name: $('n').value, email: $('em').value, subject: $('s').value, priority: $('p').value, body: $('b').value } }); location.hash = '#/c/' + r.token; }
+    try { const r = await api('/customer/tickets', { method: 'POST', body: { name: $('n').value, email: $('em').value, subject: $('s').value, priority: $('p').value, body: $('b').value, previousToken: from || undefined } }); location.hash = '#/c/' + r.token; }
     catch (e) { document.getElementById('e').textContent = e.message; }
   };
 }
@@ -130,17 +138,67 @@ async function customerPage(tk) {
     ${messages.map(m => `<div class="msg ${m.author_type}"><small><b>${esc(m.author)}</b> ${fmt(m.created_at)}</small><p>${esc(m.body)}</p></div>`).join('')}
     ${!done ? '<textarea id="b" rows="3" placeholder="Write a reply"></textarea><button class="p" id="go">Send reply</button>'
       : t.canReopen ? `<p>Not fixed? You can reopen this ticket until ${fmt(t.reopenUntil)}.</p><textarea id="b" rows="3" placeholder="What is still wrong?"></textarea><button class="p" id="go">Reopen ticket</button>`
-      : '<p>This ticket is closed and can no longer be reopened. <a href="#/new">Create a new ticket</a>.</p>'}<div class="err" id="e"></div></div>`;
+      : `<p>This ticket is closed and can no longer be reopened. <a href="#/new?from=${tk}">Create a new ticket</a> (it will be linked to this one).</p>`}<div class="err" id="e"></div></div>`;
   const go = document.getElementById('go');
   if (go) go.onclick = async () => { try { await api(`/customer/tickets/${tk}/${done ? 'reopen' : 'reply'}`, { method: 'POST', body: { body: document.getElementById('b').value } }); customerPage(tk); } catch (e) { document.getElementById('e').textContent = e.message; } };
 }
 
+async function holidaysPage() {
+  if (!token) return loginPage();
+  if (me.role !== 'manager') { app.innerHTML = '<div class="card">Holidays are managed by the support lead.</div>'; return; }
+  const rows = await api('/holidays');
+  app.innerHTML = `<div class="card"><h2>Holidays (no working time)</h2><p class="mut">Adding or removing a day recalculates the deadlines of open tickets. Each change is written to that ticket's history.</p>
+    <div class="row"><input id="hd" type="date" style="width:170px;margin:0"><input id="hn" placeholder="Name, e.g. Diwali" style="width:240px;margin:0"><button class="p" id="add">Add holiday</button></div><div class="err" id="e"></div>
+    <table><tr><th>Date</th><th>Name</th><th></th></tr>${rows.map(r => `<tr><td>${esc(r.day)}</td><td>${esc(r.name || '')}</td><td><button data-del="${esc(r.day)}">Remove</button></td></tr>`).join('') || '<tr><td colspan="3" class="mut">No holidays.</td></tr>'}</table></div>`;
+  document.getElementById('add').onclick = () => act(() => api('/holidays', { method: 'POST', body: { day: document.getElementById('hd').value, name: document.getElementById('hn').value } }), holidaysPage);
+  app.querySelectorAll('[data-del]').forEach(b => b.onclick = () => act(() => api('/holidays/' + b.dataset.del, { method: 'DELETE' }), holidaysPage));
+}
+
+async function peoplePage() {
+  if (!token) return loginPage();
+  if (me.role !== 'manager') { app.innerHTML = '<div class="card">People management is for the support lead.</div>'; return; }
+  const agents = await api('/agents');
+  const list = agents.filter(a => a.role !== 'manager');
+  app.innerHTML = `<div class="card"><h2>People</h2><p class="mut">Manage agents and reset passwords.</p>
+    <div id="reset-box" style="display:none;margin-bottom:12px;padding:12px;background:#eef7ee;border:1px solid #7bc67b;border-radius:4px">
+      <b>Password reset successful!</b><br>
+      New password: <code id="new-pw" style="font-size:16px;font-weight:bold;user-select:all"></code><br>
+      <small class="mut">Share this password privately with the agent. It will not be shown again.</small>
+    </div>
+    <div class="err" id="e"></div>
+    <table><tr><th>ID</th><th>Name</th><th>Role</th><th></th></tr>
+    ${list.map(a => `<tr><td>${a.id}</td><td>${esc(a.name)}</td><td>${esc(a.role)}</td><td><button class="p" data-reset="${a.id}" data-name="${esc(a.name)}">Reset password</button></td></tr>`).join('')}
+    </table></div>`;
+  app.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
+    try {
+      document.getElementById('e').textContent = '';
+      const r = await api(`/agents/${b.dataset.reset}/reset-password`, { method: 'POST' });
+      const box = document.getElementById('reset-box');
+      box.style.display = 'block';
+      document.getElementById('new-pw').textContent = r.password;
+    } catch (err) {
+      document.getElementById('e').textContent = err.message;
+    }
+  });
+}
+
+function passwordPage() {
+  if (!token) return loginPage();
+  app.innerHTML = `<div class="card" style="max-width:380px"><h2>Change password</h2><label>Current password</label><input id="cp" type="password">
+    <label>New password (8+ characters)</label><input id="np" type="password"><button class="p" id="go">Change password</button><div class="err" id="e"></div></div>`;
+  document.getElementById('go').onclick = async () => {
+    try { await api('/me/password', { method: 'POST', body: { current: document.getElementById('cp').value, password: document.getElementById('np').value } }); app.innerHTML = '<div class="card">Password changed. Other sessions were signed out.</div>'; }
+    catch (e) { document.getElementById('e').textContent = e.message; }
+  };
+}
+
 async function render() {
-  document.getElementById('who').innerHTML = me ? `${esc(me.name)} &middot; <a href="#" id="lo">Sign out</a>` : '';
+  document.getElementById('who').innerHTML = me ? `${esc(me.name)} &middot; <a href="#/password">Password</a> &middot; <a href="#" id="lo">Sign out</a>` : '';
+  document.getElementById('mgr').innerHTML = me && me.role === 'manager' ? '<a href="#/report">Late report</a> <a href="#/holidays">Holidays</a> <a href="#/people">People</a>' : '';
   const lo = document.getElementById('lo'); if (lo) lo.onclick = e => { e.preventDefault(); logout(); };
-  const [, a, b] = (location.hash.slice(1) || '/').split('/');
+  const [path, qs] = (location.hash.slice(1) || '/').split('?'), [, a, b] = path.split('/'), q = new URLSearchParams(qs || '');
   try {
-    if (a === 't') await ticketPage(+b); else if (a === 'report') await reportPage(); else if (a === 'new') newTicketPage(); else if (a === 'c') await customerPage(b); else await homePage();
+    if (a === 't') await ticketPage(+b); else if (a === 'report') await reportPage(); else if (a === 'new') await newTicketPage(q.get('from')); else if (a === 'holidays') await holidaysPage(); else if (a === 'password') passwordPage(); else if (a === 'people') await peoplePage(); else if (a === 'c') await customerPage(b); else await homePage();
   } catch (e) { app.innerHTML = `<div class="card err">${esc(e.message)}</div>`; }
 }
 addEventListener('hashchange', render); render();
