@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: frontdesk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/frontdesk
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL is missing!"
+            exit 1
+          fi
+          npm test | tee test.log
+          if grep -E "(# SKIP|skipped [1-9])" test.log; then
+            echo "Error: Tests were skipped because DATABASE_URL was missing or not connected"
+            exit 1
+          fi
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: frontdesk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t frontdesk .
+
+      - name: Run container against postgres service
+        run: >-
+          docker run -d
+          --name app
+          --network host
+          -e DATABASE_URL=postgres://postgres:postgres@localhost:5432/frontdesk
+          -e PORT=3000
+          frontdesk
+
+      - name: Curl /healthz until 200 (timeout 60s)
+        run: |
+          timeout=60
+          start_time=$(date +%s)
+          while true; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/healthz || true)
+            if [ "$status" = "200" ]; then
+              echo "Healthcheck passed: /healthz returned 200"
+              break
+            fi
+            now=$(date +%s)
+            if [ $((now - start_time)) -ge $timeout ]; then
+              echo "Timed out waiting for /healthz to return 200 (last status: $status)"
+              docker logs app || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+  e2e:
+    needs: test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: frontdesk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium with deps
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/frontdesk
+        run: npm run e2e

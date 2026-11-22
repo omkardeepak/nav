@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: frontdesk
+      POSTGRES_PASSWORD: frontdesk
+      POSTGRES_DB: frontdesk
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U frontdesk -d frontdesk"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 2s
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://frontdesk:frontdesk@db:5432/frontdesk
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./test:/app/test:ro
+
+  test:
+    profiles:
+      - test
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://frontdesk:frontdesk@db:5432/frontdesk
+    volumes:
+      - ./test:/app/test:ro
+    command: ["npm", "test"]
+
+volumes:
+  db-data:

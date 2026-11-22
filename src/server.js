@@ -5,6 +5,21 @@ const fs = require('fs');
 const path = require('path');
 const H = require('./hours');
 
+const envPath = path.join(__dirname, '../.env');
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith('#')) {
+      const idx = trimmed.indexOf('=');
+      if (idx !== -1) {
+        const k = trimmed.slice(0, idx).trim();
+        const v = trimmed.slice(idx + 1).trim().replace(/^['"]|['"]$/g, '');
+        if (process.env[k] === undefined) process.env[k] = v;
+      }
+    }
+  }
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.PGSSL === '1' ? { rejectUnauthorized: false } : undefined,
@@ -123,6 +138,7 @@ const healthzHandler = async (req, res) => {
     res.status(503).json({ ok: false, error: 'Database unavailable' });
   }
 };
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 app.get('/healthz', healthzHandler);
 app.get('/api/healthz', healthzHandler);
 

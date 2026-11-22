@@ -1,0 +1,61 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Trigger Render Deploy Hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "Error: RENDER_DEPLOY_HOOK secret is not set."
+            exit 1
+          fi
+          echo "Triggering deploy hook..."
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK"
+
+      - name: Poll live /healthz until 200 (timeout 5m)
+        env:
+          APP_URL: ${{ vars.APP_URL || secrets.APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "Error: APP_URL secret or variable is not set."
+            exit 1
+          fi
+
+          # Strip trailing slash if present
+          URL="${APP_URL%/}"
+          HEALTH_URL="${URL}/healthz"
+
+          echo "Polling $HEALTH_URL for up to 5 minutes..."
+          timeout=300
+          start_time=$(date +%s)
+
+          while true; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
+            if [ "$status" = "200" ]; then
+              echo "Healthcheck passed: $HEALTH_URL returned 200"
+              exit 0
+            fi
+
+            now=$(date +%s)
+            elapsed=$((now - start_time))
+            if [ $elapsed -ge $timeout ]; then
+              echo "Timed out after ${elapsed}s waiting for $HEALTH_URL to return 200 (last status: $status)"
+              exit 1
+            fi
+
+            echo "Current status: $status (elapsed: ${elapsed}s). Retrying in 10s..."
+            sleep 10
+          done

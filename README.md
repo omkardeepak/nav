@@ -13,6 +13,19 @@ Open http://localhost:3000. Agent password for the demo is `frontdesk` (env `AGE
 Customer pages: `/#/new` creates a ticket; the ticket link `/#/c/<token>` is the customer's access. Sample tickets' links are printed in the server log on first start.
 Hosted DBs that need SSL (Render, Railway): set `PGSSL=1`. Set `SEED_SAMPLE=0` to skip sample tickets.
 
+## Run with Docker
+```bash
+docker compose up --build
+```
+Open http://localhost:3000. Agent password for the demo is `frontdesk` (env `AGENT_PASSWORD`).
+
+To run the test suite with Docker:
+```bash
+docker compose run --rm app npm test
+# or using the test profile:
+docker compose --profile test run --rm test
+```
+
 ## Pages
 `/#/` agent ticket list (Late / Waiting on customer / Due soon badges, Take button) · `/#/t/:id` ticket (Reply to customer tab, separate Internal note tab, history) · `/#/report` late-ticket report · `/#/new` and `/#/c/:token` customer pages.
 
@@ -39,8 +52,26 @@ Hosted DBs that need SSL (Render, Railway): set `PGSSL=1`. Set `SEED_SAMPLE=0` t
 | Breach record | When a deadline is missed, a `sla_breach` event is written once (by a background check every 60s, and at reply/resolve time), with how late and the paused time. The report reads these events. |
 | Identity | Agents pick their name + shared demo password. Customers use the secret link of their ticket. |
 
-## Hosting
-Not deployed from here. On Render/Railway: create a Postgres DB, a Node web service with `npm install` / `npm start`, env `DATABASE_URL`, `PGSSL=1`. Tables and sample data are created on first start.
+## Deploy
+
+Live URL: `https://<your-render-subdomain>.onrender.com`
+
+### Deployment Steps (Render Blueprint)
+1. **Connect Repo**: In the [Render Dashboard](https://dashboard.render.com), click **New +** -> **Blueprint**, and select this repository.
+2. **Apply Blueprint**: Render will automatically detect `render.yaml`. Click **Apply** to provision:
+   - The PostgreSQL database (`frontdesk-db`, free tier)
+   - The web service (`frontdesk`, Docker runtime, free tier, with auto-deploy enabled)
+3. **Configure CI/CD Automation (GitHub)**:
+   - In Render, navigate to your `frontdesk` web service -> **Settings** -> copy the **Deploy Hook** URL.
+   - In your GitHub repository, go to **Settings** -> **Secrets and variables** -> **Actions**:
+     - Add Secret: `RENDER_DEPLOY_HOOK` = `<your-render-deploy-hook-url>`
+     - Add Variable (or Secret): `APP_URL` = `https://<your-render-subdomain>.onrender.com`
+   - On every push to `main`, once the `CI` workflow passes, the `Deploy` workflow triggers the deploy hook and verifies that `/healthz` on the live URL returns 200 within 5 minutes.
+
+### Notes on Free Tier Instances
+- **Cold Starts**: Render free instances automatically spin down (sleep) after 15 minutes of inactivity. The first request after a sleep period may take about 50-60 seconds to wake up.
+- **Background Checks**: The SLA breach background checker runs on a 60-second timer while the service is awake. Additionally, when sleeping instances wake up, background breach checks automatically run whenever an agent loads the ticket list or late report (`maybeSweep()`).
+- **Keep-Alive Suggestion**: To prevent the instance from sleeping during reviewer evaluation, set up a free external uptime monitor (such as [UptimeRobot](https://uptimerobot.com), [BetterStack](https://betterstack.com), or [cron-job.org](https://cron-job.org)) to send an HTTP GET request to `https://<your-render-subdomain>.onrender.com/healthz` every 10 minutes. The unauthenticated `/healthz` endpoint executes `SELECT 1`, keeping both the web service and the PostgreSQL database warm without any code modifications.
 
 ## Short note: what I did not finish, and why
 - **Not deployed.** I built and tested everything locally; the live URL still needs the 10-minute Render/Railway step above.
