@@ -34,6 +34,15 @@ const fail = (status, message) => { throw Object.assign(new Error(message), { st
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(e =>
   e.status ? res.status(e.status).json({ error: e.message }) : (console.error(e), res.status(500).json({ error: 'Server error' })));
 const text = (v, max = 5000) => { const s = String(v ?? '').trim(); if (!s) fail(400, 'Text is required'); return s.slice(0, max); };
+const hashPassword = pw => { const salt = crypto.randomBytes(16); return salt.toString('hex') + ':' + crypto.scryptSync(pw, salt, 32).toString('hex'); };
+const checkPassword = (pw, stored) => {
+  if (!stored) return false;
+  const [s, h] = stored.split(':'), x = crypto.scryptSync(pw, Buffer.from(s, 'hex'), 32), y = Buffer.from(h, 'hex');
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+const fails = new Map(); // login failures per agent+ip: 10 in 15 minutes -> 429
+const tooMany = k => { const f = fails.get(k); return !!f && f.n >= 10 && Date.now() - f.t < 15 * 60000; };
+const noteFail = k => { const f = fails.get(k); fails.set(k, f && Date.now() - f.t < 15 * 60000 ? { n: f.n + 1, t: f.t } : { n: 1, t: Date.now() }); };
 async function tx(fn) {
   const c = await pool.connect();
   try { await c.query('BEGIN'); const r = await fn(c); await c.query('COMMIT'); return r; }
@@ -59,14 +68,19 @@ function dues(p, start, pausedMin, hol) {
   return { reply: new Date(reply), res: new Date(res) };
 }
 
-async function createTicket(c, { name, email, subject, body, priority, now = new Date() }) {
+async function createTicket(c, { name, email, subject, body, priority, previousToken = null, now = new Date() }) {
   const hol = await getHolidays(c), d = dues(await getPolicy(c, priority), now, 0, hol);
+  let prev = null;
+  if (previousToken) {
+    prev = (await c.query('SELECT id,status FROM tickets WHERE token=$1', [previousToken])).rows[0];
+    if (!prev || !DONE.includes(prev.status)) fail(400, 'The earlier ticket must be resolved or closed');
+  }
   const token = crypto.randomBytes(16).toString('hex');
   const t = (await c.query(
-    'INSERT INTO tickets(token,customer_name,customer_email,subject,priority,created_at,sla_start,reply_due,resolve_due) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8) RETURNING *',
-    [token, name, email, subject, priority, now, d.reply, d.res])).rows[0];
+    'INSERT INTO tickets(token,customer_name,customer_email,subject,priority,created_at,sla_start,reply_due,resolve_due,previous_ticket_id) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9) RETURNING *',
+    [token, name, email, subject, priority, now, d.reply, d.res, prev ? prev.id : null])).rows[0];
   await c.query("INSERT INTO messages(ticket_id,author_type,body,created_at) VALUES($1,'customer',$2,$3)", [t.id, body, now]);
-  await ev(c, t.id, 'created', { type: 'customer', id: null, name }, { priority, replyDue: d.reply, resolveDue: d.res }, now);
+  await ev(c, t.id, 'created', { type: 'customer', id: null, name }, { priority, replyDue: d.reply, resolveDue: d.res, previousTicketId: prev ? prev.id : null }, now);
   return t;
 }
 
@@ -107,6 +121,7 @@ function view(t, now, hol) {
 // ---------- background work: breach detection + auto-close ----------
 async function sweep() {
   const hol = await getHolidays(pool), now = new Date();
+  await pool.query("DELETE FROM sessions WHERE created_at < now() - interval '12 hours'");
   const ids = (await pool.query("SELECT id FROM tickets WHERE status IN ('new','open','waiting')")).rows;
   for (const { id } of ids) {
     try {
@@ -127,6 +142,7 @@ const maybeSweep = async () => { if (Date.now() - lastSweep > 20000) { lastSweep
 
 // ---------- app ----------
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '100kb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
@@ -144,18 +160,45 @@ app.get('/api/healthz', healthzHandler);
 
 const auth = wrap(async (req, res, next) => {
   const tok = (req.headers.authorization || '').replace('Bearer ', '');
-  const a = (await pool.query('SELECT a.id,a.name FROM sessions s JOIN agents a ON a.id=s.agent_id WHERE s.token=$1', [tok])).rows[0];
+  const a = (await pool.query("SELECT a.id,a.name,a.role FROM sessions s JOIN agents a ON a.id=s.agent_id WHERE s.token=$1 AND s.created_at > now() - interval '12 hours'", [tok])).rows[0];
   if (!a) return res.status(401).json({ error: 'Please log in' });
-  req.agent = a; req.actor = { type: 'agent', id: a.id, name: a.name }; next();
+  req.agent = a; req.token = tok; req.actor = { type: 'agent', id: a.id, name: a.name }; next();
 });
 
-app.get('/api/agents', wrap(async (req, res) => res.json((await pool.query('SELECT id,name FROM agents ORDER BY id')).rows)));
+const manager = (req, res, next) => req.agent.role === 'manager' ? next() : res.status(403).json({ error: 'Managers only' });
+app.get('/api/agents', wrap(async (req, res) => res.json((await pool.query('SELECT id,name,role FROM agents ORDER BY id')).rows)));
 app.post('/api/login', wrap(async (req, res) => {
-  if (req.body.password !== (process.env.AGENT_PASSWORD || 'frontdesk')) fail(401, 'Wrong password');
-  const a = (await pool.query('SELECT id,name FROM agents WHERE id=$1', [+req.body.agentId])).rows[0] || fail(400, 'Unknown agent');
+  const id = +req.body.agentId, key = id + '|' + req.ip;
+  if (tooMany(key)) fail(429, 'Too many failed attempts. Try again in 15 minutes.');
+  const a = (await pool.query('SELECT id,name,role,password_hash FROM agents WHERE id=$1', [id])).rows[0];
+  if (!a || !checkPassword(String(req.body.password ?? '').slice(0, 200), a.password_hash)) { noteFail(key); fail(401, 'Wrong agent or password'); }
+  fails.delete(key);
   const token = crypto.randomBytes(24).toString('hex');
   await pool.query('INSERT INTO sessions(token,agent_id) VALUES($1,$2)', [token, a.id]);
-  res.json({ token, agent: a });
+  res.json({ token, agent: { id: a.id, name: a.name, role: a.role } });
+}));
+app.post('/api/me/password', auth, wrap(async (req, res) => {
+  const cur = String(req.body.current ?? '').slice(0, 200), next = String(req.body.password ?? '');
+  if (next.length < 8 || next.length > 200) fail(400, 'New password must be 8 to 200 characters');
+  const a = (await pool.query('SELECT password_hash FROM agents WHERE id=$1', [req.agent.id])).rows[0];
+  if (!checkPassword(cur, a.password_hash)) fail(401, 'Current password is wrong');
+  await pool.query('UPDATE agents SET password_hash=$2 WHERE id=$1', [req.agent.id, hashPassword(next)]);
+  await pool.query('DELETE FROM sessions WHERE agent_id=$1 AND token<>$2', [req.agent.id, req.token]);
+  res.json({ ok: true });
+}));
+app.post('/api/agents/:id/reset-password', auth, manager, wrap(async (req, res) => {
+  const id = +req.params.id;
+  const target = (await pool.query('SELECT id, name, role FROM agents WHERE id=$1', [id])).rows[0];
+  if (!target) fail(404, 'Agent not found');
+  if (target.role === 'manager') fail(403, 'A manager cannot reset another manager');
+  const pwd = (req.body && req.body.password) ? String(req.body.password) : crypto.randomBytes(9).toString('base64url');
+  const now = new Date();
+  await tx(async c => {
+    await c.query('UPDATE agents SET password_hash=$2 WHERE id=$1', [id, hashPassword(pwd)]);
+    await c.query('DELETE FROM sessions WHERE agent_id=$1', [id]);
+    await c.query("INSERT INTO account_events(agent_id,type,actor_id,actor_name,created_at) VALUES($1,'password_reset',$2,$3,$4)", [id, req.agent.id, req.agent.name, now]);
+  });
+  res.json({ password: pwd });
 }));
 
 // ----- agent: list, detail -----
@@ -172,7 +215,8 @@ app.get('/api/tickets/:id', auth, wrap(async (req, res) => {
   const pub = (await pool.query("SELECT 'public' kind, m.author_type, COALESCE(a.name,$2) author, m.body, m.created_at FROM messages m LEFT JOIN agents a ON a.id=m.author_id WHERE m.ticket_id=$1", [id, t.customer_name])).rows;
   const notes = (await pool.query("SELECT 'internal' kind, 'agent' author_type, a.name author, n.body, n.created_at FROM internal_notes n JOIN agents a ON a.id=n.agent_id WHERE n.ticket_id=$1", [id])).rows;
   const events = (await pool.query('SELECT type,actor_type,actor_name,detail,created_at FROM ticket_events WHERE ticket_id=$1 ORDER BY id', [id])).rows;
-  res.json({ ticket: view(t, now, hol), thread: [...pub, ...notes].sort((x, y) => x.created_at - y.created_at), events });
+  const followUps = (await pool.query('SELECT id FROM tickets WHERE previous_ticket_id=$1 ORDER BY id', [id])).rows.map(r => r.id);
+  res.json({ ticket: view(t, now, hol), thread: [...pub, ...notes].sort((x, y) => x.created_at - y.created_at), events, followUps });
 }));
 
 // ----- agent: actions -----
@@ -250,7 +294,7 @@ app.post('/api/tickets/:id/priority', auth, wrap(async (req, res) => {
 }));
 
 // ----- manager: late-ticket report (built from the immutable event log) -----
-app.get('/api/report/late', auth, wrap(async (req, res) => {
+app.get('/api/report/late', auth, manager, wrap(async (req, res) => {
   await maybeSweep();
   const rows = (await pool.query(`SELECT e.created_at, e.detail, t.id ticket_id, t.subject, t.priority, a.name assignee,
       EXISTS(SELECT 1 FROM ticket_events x WHERE x.ticket_id=t.id AND x.type='priority_change') priority_changed
@@ -267,17 +311,49 @@ app.get('/api/report/late', auth, wrap(async (req, res) => {
   }));
 }));
 
+// ----- manager: holidays. Changing them recalculates open tickets' deadlines; each change is logged on the ticket. -----
+async function recalcOpenTickets(c, actor, reason) {
+  const hol = await getHolidays(c), now = new Date(), pol = {};
+  const rows = (await c.query("SELECT * FROM tickets WHERE status IN ('new','open','waiting') ORDER BY id FOR UPDATE")).rows;
+  for (const t of rows) {
+    pol[t.priority] = pol[t.priority] || await getPolicy(c, t.priority);
+    const d = dues(pol[t.priority], t.sla_start, t.paused_total_min, hol);
+    if (+d.reply === +t.reply_due && +d.res === +t.resolve_due) continue;
+    await c.query('UPDATE tickets SET reply_due=$2, resolve_due=$3 WHERE id=$1', [t.id, d.reply, d.res]);
+    await ev(c, t.id, 'deadline_recalculated', actor, { reason, oldReplyDue: t.reply_due, oldResolveDue: t.resolve_due, replyDue: d.reply, resolveDue: d.res }, now);
+  }
+}
+app.get('/api/holidays', auth, manager, wrap(async (req, res) =>
+  res.json((await pool.query("SELECT to_char(day,'YYYY-MM-DD') AS day, name FROM holidays ORDER BY day")).rows)));
+app.post('/api/holidays', auth, manager, wrap(async (req, res) => {
+  const day = String(req.body.day || ''), name = text(req.body.name, 100);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || new Date(day + 'T00:00:00Z').toISOString().slice(0, 10) !== day) fail(400, 'Date must be YYYY-MM-DD');
+  await tx(async c => {
+    await c.query('INSERT INTO holidays(day,name) VALUES($1,$2) ON CONFLICT (day) DO UPDATE SET name=$2', [day, name]);
+    await recalcOpenTickets(c, req.actor, `holiday added: ${day} ${name}`);
+  });
+  res.json({ ok: true });
+}));
+app.delete('/api/holidays/:day', auth, manager, wrap(async (req, res) => {
+  await tx(async c => {
+    const r = await c.query('DELETE FROM holidays WHERE day=$1', [req.params.day]);
+    if (!r.rowCount) fail(404, 'Holiday not found');
+    await recalcOpenTickets(c, req.actor, `holiday removed: ${req.params.day}`);
+  });
+  res.json({ ok: true });
+}));
+
 // ----- customer (no login; the ticket token is the credential). Only SELECTs the messages table. -----
 app.post('/api/customer/tickets', wrap(async (req, res) => {
-  const t = await tx(c => createTicket(c, { name: text(req.body.name, 100), email: text(req.body.email, 200), subject: text(req.body.subject, 200), body: text(req.body.body), priority: String(req.body.priority) }));
+  const t = await tx(c => createTicket(c, { name: text(req.body.name, 100), email: text(req.body.email, 200), subject: text(req.body.subject, 200), body: text(req.body.body), priority: String(req.body.priority), previousToken: req.body.previousToken ? String(req.body.previousToken) : null }));
   res.json({ token: t.token });
 }));
 
 app.get('/api/customer/tickets/:token', wrap(async (req, res) => {
-  const t = (await pool.query('SELECT id,subject,status,priority,created_at,done_at,customer_name FROM tickets WHERE token=$1', [req.params.token])).rows[0] || fail(404, 'Not found');
+  const t = (await pool.query('SELECT id,subject,status,priority,created_at,done_at,customer_name,customer_email FROM tickets WHERE token=$1', [req.params.token])).rows[0] || fail(404, 'Not found');
   const messages = (await pool.query("SELECT author_type, CASE WHEN author_type='agent' THEN 'Arvo Support' ELSE $2 END author, body, created_at FROM messages WHERE ticket_id=$1 ORDER BY id", [t.id, t.customer_name])).rows;
   const until = DONE.includes(t.status) && t.done_at ? new Date(+t.done_at + REOPEN_DAYS * 864e5) : null;
-  res.json({ ticket: { id: t.id, subject: t.subject, status: t.status, created_at: t.created_at, canReopen: !!until && new Date() <= until, reopenUntil: until }, messages });
+  res.json({ ticket: { id: t.id, subject: t.subject, status: t.status, customerName: t.customer_name, customerEmail: t.customer_email, created_at: t.created_at, canReopen: !!until && new Date() <= until, reopenUntil: until }, messages });
 }));
 
 app.post('/api/customer/tickets/:token/reply', wrap(async (req, res) => {
@@ -314,10 +390,14 @@ async function init() {
   await pool.query(`INSERT INTO sla_policies(priority,reply_min,resolve_min,label) VALUES
     ('critical',120,NULL,'Cannot work at all'),('medium',270,1620,'Medium'),('low',540,2700,'Question / small request') ON CONFLICT DO NOTHING`);
   await pool.query(`INSERT INTO holidays(day,name) VALUES ('2026-12-25','Christmas'),('2027-01-26','Republic Day'),('2027-08-15','Independence Day') ON CONFLICT DO NOTHING`);
-  if (!(await pool.query('SELECT 1 FROM agents LIMIT 1')).rowCount) {
+  if (!(await pool.query('SELECT 1 FROM agents LIMIT 1')).rowCount)
     for (const n of ['Asha', 'Bilal', 'Chitra', 'Dev', 'Esha', 'Farid', 'Gita', 'Hari', 'Isha'])
       await pool.query('INSERT INTO agents(name,email) VALUES($1,$2)', [n, n.toLowerCase() + '@arvo.example']);
-  }
+  if (!(await pool.query("SELECT 1 FROM agents WHERE role='manager'")).rowCount)
+    await pool.query("INSERT INTO agents(name,email,role) VALUES('Meera','meera@arvo.example','manager') ON CONFLICT DO NOTHING");
+  // every account gets its own salted hash of the initial password (AGENT_PASSWORD, default 'frontdesk'); each person can change theirs
+  for (const r of (await pool.query('SELECT id FROM agents WHERE password_hash IS NULL')).rows)
+    await pool.query('UPDATE agents SET password_hash=$2 WHERE id=$1', [r.id, hashPassword(process.env.AGENT_PASSWORD || 'frontdesk')]);
   if (process.env.SEED_SAMPLE !== '0' && !(await pool.query('SELECT 1 FROM tickets LIMIT 1')).rowCount) await seedSamples();
 }
 

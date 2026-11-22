@@ -38,12 +38,22 @@ CREATE TABLE IF NOT EXISTS ticket_events (
   type TEXT NOT NULL, actor_type TEXT NOT NULL CHECK (actor_type IN ('agent','customer','system')),
   actor_id INT, actor_name TEXT NOT NULL, detail JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL
 );
+CREATE TABLE IF NOT EXISTS account_events (
+  id BIGSERIAL PRIMARY KEY, agent_id INT NOT NULL REFERENCES agents(id),
+  type TEXT NOT NULL, actor_id INT REFERENCES agents(id),
+  actor_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL
+);
+
+-- migrations (safe to re-run)
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'agent';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS previous_ticket_id INT REFERENCES tickets(id);
 
 -- Append-only: history cannot be edited or deleted (INC-0318)
 CREATE OR REPLACE FUNCTION forbid_change() RETURNS trigger AS $$
 BEGIN RAISE EXCEPTION '% is append-only', TG_TABLE_NAME; END $$ LANGUAGE plpgsql;
 DO $$ DECLARE t TEXT; BEGIN
-  FOREACH t IN ARRAY ARRAY['ticket_events','messages','internal_notes'] LOOP
+  FOREACH t IN ARRAY ARRAY['ticket_events','messages','internal_notes','account_events'] LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS %I_ro ON %I', t, t);
     EXECUTE format('CREATE TRIGGER %I_ro BEFORE UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION forbid_change()', t, t);
     EXECUTE format('DROP TRIGGER IF EXISTS %I_ro_trunc ON %I', t, t);

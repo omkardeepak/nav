@@ -2,6 +2,8 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: frontdesk
       POSTGRES_PASSWORD: frontdesk
@@ -23,10 +25,14 @@ services:
     environment:
       DATABASE_URL: postgres://frontdesk:frontdesk@db:5432/frontdesk
       PORT: 3000
+      AGENT_PASSWORD: frontdesk
     ports:
       - "3000:3000"
     volumes:
+      - ./public:/app/public:ro
+      - ./src:/app/src:ro
       - ./test:/app/test:ro
+      - ./schema.sql:/app/schema.sql:ro
 
   test:
     profiles:
@@ -37,8 +43,12 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://frontdesk:frontdesk@db:5432/frontdesk
+      AGENT_PASSWORD: frontdesk
     volumes:
+      - ./public:/app/public:ro
+      - ./src:/app/src:ro
       - ./test:/app/test:ro
+      - ./schema.sql:/app/schema.sql:ro
     command: ["npm", "test"]
 
 volumes:

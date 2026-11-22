@@ -14,7 +14,7 @@ services:
       - key: PGSSL
         value: "1"
       - key: AGENT_PASSWORD
-        generateValue: true
+        sync: false
 
 databases:
   - name: frontdesk-db
