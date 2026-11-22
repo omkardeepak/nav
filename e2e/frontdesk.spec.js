@@ -401,7 +401,42 @@ test.describe.serial('Frontdesk E2E Tests', () => {
     }
   });
 
-  test('8. Assert there are no console errors on each page', async ({ browser }) => {
+  test('8. Meera navigates to /#/sla, views SLA policies and important notice', async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    trackErrors(page);
+
+    try {
+      await page.goto('/#/');
+      await page.selectOption('#ag', { label: 'Meera (support lead)' });
+      await page.fill('#pw', 'frontdesk');
+      await page.click('#go');
+      await expect(page.locator('h2')).toContainText('Tickets');
+
+      // Click SLA link next to Holidays
+      await expect(page.locator('header a[href="#/sla"]')).toBeVisible();
+      await page.click('header a[href="#/sla"]');
+      await page.waitForURL(/#\/sla/);
+      await expect(page.locator('h2')).toContainText('SLA Targets');
+
+      // Verify notice is present
+      await expect(page.locator('.card p')).toContainText('Changes apply only to tickets created or reopened from now on. Existing tickets keep their deadlines.');
+
+      // Verify rows for critical, medium, low
+      await expect(page.locator('tr[data-prio="critical"]')).toBeVisible();
+      await expect(page.locator('tr[data-prio="medium"]')).toBeVisible();
+      await expect(page.locator('tr[data-prio="low"]')).toBeVisible();
+
+      // Test editing Low priority: save button updates successfully
+      const lowRow = page.locator('tr[data-prio="low"]');
+      await lowRow.locator('button[data-save-sla="low"]').click();
+      await expect(page.locator('#sla-msg')).toBeVisible();
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('9. Assert there are no console errors on each page', async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
     trackErrors(page);
@@ -450,11 +485,15 @@ test.describe.serial('Frontdesk E2E Tests', () => {
       await page.goto('/#/holidays');
       await expect(page.locator('h2')).toContainText('Holidays');
 
-      // 8. /#/people
+      // 8. /#/sla
+      await page.goto('/#/sla');
+      await expect(page.locator('h2')).toContainText('SLA Targets');
+
+      // 9. /#/people
       await page.goto('/#/people');
       await expect(page.locator('h2')).toContainText('People');
 
-      // 9. /#/c/<token> (Customer page)
+      // 10. /#/c/<token> (Customer page)
       await page.goto(`/#/c/${createdToken}`);
       await expect(page.locator('h2')).toContainText('Production system offline');
     } finally {

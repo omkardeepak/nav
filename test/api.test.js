@@ -184,6 +184,43 @@ run('manager reset works; old password stops working while new signs in; passwor
   // Restore password
   await call('/agents/3/reset-password', { method: 'POST', body: { password: 'frontdesk' } }, M);
 });
+run('agent gets 403 on SLA endpoints', async () => {
+  assert.equal((await call('/sla', {}, A)).status, 403);
+  assert.equal((await call('/sla/medium', { method: 'PUT', body: { reply_min: 180, resolve_min: 1080 } }, A)).status, 403);
+});
+run('invalid SLA values get 400', async () => {
+  assert.equal((await call('/sla/invalid-prio', { method: 'PUT', body: { reply_min: 180, resolve_min: 1080 } }, M)).status, 400);
+  assert.equal((await call('/sla/medium', { method: 'PUT', body: { reply_min: 10, resolve_min: 1080 } }, M)).status, 400);
+  assert.equal((await call('/sla/medium', { method: 'PUT', body: { reply_min: 5000, resolve_min: 6000 } }, M)).status, 400);
+  assert.equal((await call('/sla/medium', { method: 'PUT', body: { reply_min: 'bad', resolve_min: 1080 } }, M)).status, 400);
+  assert.equal((await call('/sla/medium', { method: 'PUT', body: { reply_min: 300, resolve_min: 200 } }, M)).status, 400);
+  assert.equal((await call('/sla/medium', { method: 'PUT', body: { reply_min: 300, resolve_min: 20000 } }, M)).status, 400);
+});
+run('valid SLA change moves deadline of NEW ticket but not existing open ticket; change is in account_events', async () => {
+  const oldT = await newTicket('medium');
+  const oldDetails = (await call('/tickets/' + oldT.id, {}, A)).json.ticket;
+
+  const putRes = await call('/sla/medium', { method: 'PUT', body: { reply_min: 180, resolve_min: 1080 } }, M);
+  assert.equal(putRes.status, 200);
+
+  const oldAfter = (await call('/tickets/' + oldT.id, {}, A)).json.ticket;
+  assert.equal(+new Date(oldAfter.reply_due), +new Date(oldDetails.reply_due));
+  assert.equal(+new Date(oldAfter.resolve_due), +new Date(oldDetails.resolve_due));
+
+  const newT = await newTicket('medium');
+  const newDetails = (await call('/tickets/' + newT.id, {}, A)).json.ticket;
+  assert.ok(new Date(newDetails.reply_due) < new Date(oldDetails.reply_due));
+
+  const evs = (await pool.query("SELECT * FROM account_events WHERE type='sla_change' ORDER BY id DESC")).rows;
+  assert.ok(evs.length > 0);
+  assert.equal(evs[0].detail.priority, 'medium');
+  assert.equal(evs[0].detail.from.reply_min, 270);
+  assert.equal(evs[0].detail.to.reply_min, 180);
+  assert.equal(evs[0].actor_id, 10);
+
+  // Restore policy
+  await call('/sla/medium', { method: 'PUT', body: { reply_min: 270, resolve_min: 1620 } }, M);
+});
 run('database migrations: fresh database and upgraded old database', async () => {
   async function cleanDb() {
     await pool.query(`

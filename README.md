@@ -17,7 +17,7 @@ Hosted DBs that need SSL (Render, Railway): set `PGSSL=1`. Set `SEED_SAMPLE=0` t
 | Role | Can |
 |---|---|
 | Agent (9) | See all tickets, take a ticket, reply (only on tickets they took), write internal notes, ask a question and wait, change priority, resolve, read history, change own password |
-| Support lead (Meera) | Everything an agent can, plus the **late report**, the **holidays** page, and **reset an agent's password** |
+| Support lead (Meera) | Everything an agent can, plus the **late report**, the **holidays** page, **SLA targets** configuration, and **reset an agent's password** |
 | Customer | No login. Creates a ticket, replies, reopens within 7 days using the secret ticket link |
 | System | Records SLA breaches and auto-closes; appears as "system" in the history |
 
@@ -35,7 +35,7 @@ docker compose --profile test run --rm test
 ```
 
 ## Pages
-`/#/` ticket list (Late / Waiting on customer / Due soon badges, Take button) · `/#/t/:id` ticket (Reply to customer tab, separate Internal note tab, history) · `/#/password` · lead only: `/#/report` (late tickets, which target, how late, why), `/#/holidays`, and `/#/people` · customer: `/#/new` and `/#/c/:token`.
+`/#/` ticket list (Late / Waiting on customer / Due soon badges, Take button) · `/#/t/:id` ticket (Reply to customer tab, separate Internal note tab, history) · `/#/password` · lead only: `/#/report` (late tickets, which target, how late, why), `/#/holidays`, `/#/sla` (SLA targets), and `/#/people` · customer: `/#/new` and `/#/c/:token`.
 
 ## How each incident is handled
 | Incident | Fix |
@@ -51,7 +51,7 @@ docker compose --profile test run --rm test
 | Critical | Reply 2 working hours. Resolve by 18:30 on the working day the clock starts. |
 | Medium | Reply "half a day" = 4.5 working hours. Resolve "about 3 days" = 3 working days (27h). |
 | Low | Reply 1 working day (9h). Resolve "about a week" = 5 working days. |
-| Values | All in the `sla_policies` table, in minutes. Change them there. |
+| Values | Configured in the `sla_policies` table and editable by the support lead on `/#/sla` (applies to tickets created or reopened from then on; open tickets keep their deadlines). |
 | Created outside hours | Clock starts at the next working moment (Fri 18:00 + 2h = Mon 11:00; not late on Sunday). |
 | Waiting on customer | The agent's reply that asks a question pauses the clock. Customer's reply resumes it, and both deadlines move later by the working minutes spent waiting. Waiting tickets are never "late". |
 | Auto-close | 5 working days in "waiting" with no customer reply. Actor is `system`. |
@@ -59,7 +59,7 @@ docker compose --profile test run --rm test
 | **Priority change mid-way** | Deadlines are recalculated from the **original start** with the new priority, keeping paused time. The clock does not restart (otherwise raising then lowering priority could hide lateness). If the new deadline is already past, the ticket becomes late at once. Event logged with old and new deadlines. Breaches already recorded stay. |
 | Breach record | When a deadline is missed, a `sla_breach` event is written once (by a background check every 60s, and at reply/resolve time), with how late and the paused time. The report reads these events. |
 | Identity | Each agent has their own salted-hash password (scrypt), 12-hour sessions, and a lock after 10 wrong tries in 15 minutes. Customers use the secret link of their ticket. |
-| Manager | One role, "manager" (Meera): only she sees the late report, edits holidays, and can reset an agent's password. She is not one of the 9 agents. |
+| Manager | One role, "manager" (Meera): only she sees the late report, edits holidays, manages SLA targets, and can reset an agent's password. She is not one of the 9 agents. |
 | Holidays | Managed on the holidays page. Adding or removing a day **recalculates the deadlines of open tickets**, and each change is written to that ticket's history as `deadline_recalculated` with the old and new deadlines. |
 | New ticket after the window | A link on the closed ticket page creates a new ticket that is **linked** to the old one (`previous_ticket_id`), shown on both tickets for agents. Customers never see the old conversation on the new ticket. |
 
@@ -88,6 +88,5 @@ Live URL: `https://<your-render-subdomain>.onrender.com`
 Everything in the story's rules is built and tested. What is left is lower priority:
 - **No email notifications.** Customers get no email when an agent replies; they must reopen their ticket link. Needs an email provider, which is outside the 8 hours.
 - **No tamper-evident hash chain** on the event log. Database triggers stop edits and deletes, but a database owner could still drop the triggers.
-- **SLA targets are edited in the `sla_policies` table**, not on a screen (holidays do have a screen).
 - **Free-tier hosting sleeps** after inactivity. The breach and auto-close check also runs when the list or report is opened, so nothing is lost, but it may be recorded a little late.
 - **Not done:** search, pagination, attachments, edit of tickets by customer.
